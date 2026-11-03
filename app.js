@@ -37,7 +37,7 @@ function balance(id) { return round((client(id)?.opening || 0) + db.orders.filte
 function field(label, name, value = '', type = 'text', extra = '') { return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`; }
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
 function clientButton(c) { return `<button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>`; }
-function orderRows(orders) { return orders.map(o=>`<tr><td><button class="link" data-order="${esc(o.id)}">#${esc(o.number)}</button></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
+function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function render() {
   const titles = {panel:'Resumen',clientes:'Clientes',productos:'Productos',pedidos:'Pedidos',cuentas:'Cuenta corriente',datos:'Importar y respaldar'};
   $('#title').textContent = titles[view];
@@ -98,7 +98,77 @@ function newOrder() {
 function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
   modal(`Pedido #${o.number}`,`<p><strong>${esc(client(o.clientId)?.name)}</strong> · ${prettyDate(o.date)}</p>${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button></div>`);
-  $('#save-status').onclick=()=>{const status=$('#status').value;if(commit(n=>n.orders.find(x=>x.id===id).status=status)){close();render();toast('Estado actualizado');}};$('#print-order').onclick=()=>window.print();
+  $('#save-status').onclick=()=>{const status=$('#status').value;if(commit(n=>n.orders.find(x=>x.id===id).status=status)){close();render();toast('Estado actualizado');}};
+  $('#print-order').insertAdjacentHTML('beforebegin',`<button class="primary" data-pdf="${esc(id)}">Descargar PDF</button>`);
+  $('#print-order').textContent='Imprimir';$('#print-order').onclick=()=>window.print();
+}
+let pdfLibrary;
+function loadPdfLibrary() {
+  if(window.jspdf?.jsPDF)return Promise.resolve(window.jspdf.jsPDF);
+  if(!pdfLibrary)pdfLibrary=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='https://cdn.jsdelivr.net/npm/jspdf@3.0.4/dist/jspdf.umd.min.js';
+    const timer=setTimeout(()=>{script.remove();reject(Error('El lector PDF tardó demasiado. Revisá la conexión y volvé a intentar.'));},20000);
+    script.onload=()=>{clearTimeout(timer);if(window.jspdf?.jsPDF)resolve(window.jspdf.jsPDF);else reject(Error('No se pudo iniciar el generador PDF.'));};
+    script.onerror=()=>{clearTimeout(timer);script.remove();reject(Error('Necesitás conexión a internet para cargar el generador PDF.'));};
+    document.head.append(script);
+  }).catch(error=>{pdfLibrary=undefined;throw error;});
+  return pdfLibrary;
+}
+function buildOrderPdf(order, customer, company, JsPDF) {
+  const doc=new JsPDF({unit:'mm',format:'a4'});
+  const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
+  const cash=n=>text(money(n));let y=18;
+  doc.setProperties({title:`${company} - Pedido ${order.number}`,subject:'Pedido comercial, no válido como factura',author:company});
+  const heading=()=>{
+    doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
+    const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,18);y=20+companyLines.length*7;
+    doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
+    doc.setTextColor(35,55,47);doc.setFont('helvetica','normal');doc.setFontSize(10);
+    const customerLines=doc.splitTextToSize(`Cliente: ${text(customer?.name||'Cliente')}`,182);doc.text(customerLines,14,y);y+=customerLines.length*5+3;
+    doc.setFillColor(237,242,232);doc.rect(14,y-4,182,8,'F');doc.setFont('helvetica','bold');doc.setFontSize(9);
+    doc.text('Código / descripción',16,y+1);doc.text('Cant.',105,y+1,{align:'right'});doc.text('Precio lista',148,y+1,{align:'right'});doc.text('Importe',194,y+1,{align:'right'});y+=12;
+    doc.setFont('helvetica','normal');
+  };
+  const page=()=>{doc.addPage();heading();};
+  heading();
+  for(const line of order.lines){
+    const description=doc.splitTextToSize(text(`${line.code} - ${line.name}`),78);let index=0;
+    while(index<description.length){
+      if(y+6>265)page();const available=Math.max(1,Math.floor((265-y)/4.5));const part=description.slice(index,index+available);
+      doc.text(part,14,y);
+      if(index===0){doc.setFontSize(8);doc.text(String(line.qty),105,y,{align:'right'});doc.text(cash(line.price),148,y,{align:'right'});doc.text(cash(round(line.price*line.qty)),196,y,{align:'right'});doc.setFontSize(9);}
+      y+=part.length*4.5;index+=part.length;if(index<description.length)page();
+    }
+    doc.setDrawColor(225,230,222);doc.line(14,y,196,y);y+=6;
+  }
+  if(y+34>270)page();
+  doc.setFontSize(10);doc.text('Subtotal de lista',110,y);doc.text(cash(order.subtotal),196,y,{align:'right'});y+=7;
+  doc.text(`Descuento (${order.discount}%)`,110,y);doc.text(`- ${cash(order.discountAmount)}`,196,y,{align:'right'});y+=9;
+  doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text('TOTAL',110,y);doc.text(cash(order.total),196,y,{align:'right'});y+=12;
+  doc.setFont('helvetica','normal');doc.setFontSize(9);
+  const notes=doc.splitTextToSize(text(order.notes?`Notas: ${order.notes}`:''),180);
+  for(const note of notes){if(y+5>270)page();doc.text(note,14,y);y+=5;}
+  const pages=doc.getNumberOfPages();
+  for(let i=1;i<=pages;i++){doc.setPage(i);doc.setTextColor(110);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text('Importes en pesos argentinos. Pedido no válido como factura ni recibo de pago.',14,282);doc.text(`${i} / ${pages}`,196,288,{align:'right'});}
+  return doc;
+}
+let orderPdfUrl;
+async function downloadOrderPdf(id,button) {
+  const order=db.orders.find(o=>o.id===id);if(!order)return;
+  const snapshot=structuredClone(order),customer=structuredClone(client(order.clientId)||{}),company=companyNames[companyId];
+  const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
+  try{
+    const JsPDF=await loadPdfLibrary();const doc=buildOrderPdf(snapshot,customer,company,JsPDF);
+    const safeCompany=company.replace(/[^a-zA-Z0-9_-]/g,'-');
+    const filename=`${safeCompany}-pedido-${snapshot.number}.pdf`;
+    const blob=doc.output('blob');
+    if(orderPdfUrl)URL.revokeObjectURL(orderPdfUrl);orderPdfUrl=URL.createObjectURL(blob);
+    modal(`PDF del pedido #${snapshot.number}`,`<p>El archivo PDF está listo. Tocá <strong>Abrir PDF</strong> y, en el iPad, usá <strong>Compartir → Guardar en Archivos</strong> o WhatsApp.</p><div class="actions"><a class="primary" style="display:inline-block;padding:13px 18px;border-radius:9px;text-decoration:none" href="${esc(orderPdfUrl)}" target="_blank" rel="noopener">Abrir PDF</a><a style="display:inline-block;padding:13px 18px;border:1px solid #d5ded5;border-radius:9px;color:#173e36;text-decoration:none" href="${esc(orderPdfUrl)}" download="${esc(filename)}">Guardar PDF</a><button id="share-order-pdf" hidden>Compartir PDF</button></div>`);
+    const file=new File([blob],filename,{type:'application/pdf'});
+    if(navigator.canShare?.({files:[file]})){$('#share-order-pdf').hidden=false;$('#share-order-pdf').onclick=()=>navigator.share({files:[file],title:`Pedido #${snapshot.number}`}).catch(error=>{if(error.name!=='AbortError')alert('No se pudo compartir. Usá Abrir PDF o Guardar PDF.');});}
+  }catch(error){alert(`No se pudo generar el PDF. ${error.message}`);}
+  finally{if(button){button.disabled=false;button.textContent=original;}}
 }
 function download(name,content,type) {const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=`empresa-${companyId}-${name}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}
 function renderData(root) {
@@ -166,6 +236,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.product)editProduct(b.dataset.product);
   if(b.dataset.payment)payment(b.dataset.payment);
   if(b.dataset.order)showOrder(b.dataset.order);
+  if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   const action=b.dataset.action;if(action==='client')editClient();if(action==='product')editProduct();if(action==='import'){view='datos';render();}if(action==='orders'){view='pedidos';render();}
 });
 $('#company-select').onchange=e=>{close();companyId=e.target.value;KEY=companyId==='1'?'ferreteria-crm-v1':'ferreteria-crm-v1-company-2';savePreferences();loadCompany();render();toast(`Empresa activa: ${companyNames[companyId]}`);};
