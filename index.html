@@ -6,11 +6,16 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#173e36">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <title>Mi Ferretería · CRM</title>
   <link rel="stylesheet" href="styles.css">
-  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script defer src="xlsx.full.min.js"></script>
+  <script defer src="jspdf.umd.min.js"></script>
   <script defer src="catalogos.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="offline.js"></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -29,6 +34,7 @@
   <main>
     <header><div><p class="eyebrow" id="today"></p><h1 id="title">Resumen</h1></div><button class="primary" id="new-order">+ Nuevo pedido</button></header>
     <div id="storage-warning" class="notice" hidden></div>
+    <div id="offline-status" class="notice" role="status"><span id="offline-message">Preparando el uso sin conexión… Abrí la app con internet la primera vez.</span> <button id="offline-update" hidden>Actualizar app</button><button id="offline-retry" hidden>Reintentar</button></div>
     <div id="content"></div>
     <footer>Datos guardados en este navegador. Hacé un respaldo periódicamente.</footer>
   </main>
