@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#173e36">
+  <title>Mi Ferretería · CRM</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script defer src="catalogos.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">F</span><div>Mi Ferretería<small>CLIENTES Y PEDIDOS</small></div></div>
+    <div class="company-picker"><label for="company-select">EMPRESA ACTIVA</label><select id="company-select"><option value="1">Bonfigli</option><option value="2">Dimafe</option></select><button id="rename-company">Cambiar nombre</button></div>
+    <nav aria-label="Secciones">
+      <button data-view="panel" class="active">◫ <span>Resumen</span></button>
+      <button data-view="clientes">♙ <span>Clientes</span></button>
+      <button data-view="productos">▦ <span>Productos</span></button>
+      <button data-view="pedidos">≡ <span>Pedidos</span></button>
+      <button data-view="cuentas">↔ <span>Cuenta corriente</span></button>
+      <button data-view="datos">⇧ <span>Importar y respaldar</span></button>
+    </nav>
+    <div class="sidebar-note">Tu negocio, en orden.<br><small>Uso personal · Sin control de stock</small></div>
+  </aside>
+  <main>
+    <header><div><p class="eyebrow" id="today"></p><h1 id="title">Resumen</h1></div><button class="primary" id="new-order">+ Nuevo pedido</button></header>
+    <div id="storage-warning" class="notice" hidden></div>
+    <div id="content"></div>
+    <footer>Datos guardados en este navegador. Hacé un respaldo periódicamente.</footer>
+  </main>
+  <dialog id="modal"><div class="dialog-head"><h2 id="modal-title"></h2><button class="icon" id="close-modal" aria-label="Cerrar">✕</button></div><div id="modal-body"></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
