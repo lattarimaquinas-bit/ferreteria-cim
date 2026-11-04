@@ -56,7 +56,7 @@ function paymentApplications(id,amount) {
 }
 function field(label, name, value = '', type = 'text', extra = '') { return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`; }
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
-function clientButton(c) { return `<button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>`; }
+function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button><br><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button></div>`; }
 function paymentRows(payments) {return payments.map(p=>`<tr><td><button class="primary" data-receipt="${esc(p.id)}">Recibo PDF${p.receipt?` #${p.receipt.number}`:''}</button></td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
 function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function render() {
@@ -92,6 +92,62 @@ function showClient(id) {
   const c = client(id); if(!c)return;
   const movements = [...db.invoices.filter(i=>i.clientId===id).map(i=>({date:i.date,detail:`Factura ${i.number} · vence ${prettyDate(i.due)}`,amount:i.amount})),...db.payments.filter(p=>p.clientId===id).map(p=>({date:p.date,detail:`Pago · ${p.note||'Sin detalle'}`,amount:-p.amount}))].sort((a,b)=>a.date.localeCompare(b.date));
   modal(c.name,`<div class="actions"><span class="badge">Descuento: ${c.discount}%</span><button data-edit-client="${esc(id)}">Editar cliente</button><button class="primary" data-payment="${esc(id)}">Registrar pago</button></div><p>${esc(c.phone)}${c.address?` · ${esc(c.address)}`:''}</p><p class="muted">${esc(c.notes)}</p>${c.followup?`<p class="notice">Seguimiento: ${prettyDate(c.followup)}</p>`:''}<small>SALDO ACTUAL · positivo: debe / negativo: a favor</small><div class="balance">${money(balance(id))}</div>${table(['Fecha','Movimiento','Importe'],`<tr><td>—</td><td>Saldo inicial</td><td>${money(c.opening)}</td></tr>`+movements.map(m=>`<tr><td>${prettyDate(m.date)}</td><td>${esc(m.detail)}</td><td>${money(m.amount)}</td></tr>`).join(''))}`);
+  $('#modal-body .actions').insertAdjacentHTML('beforeend',`<button data-statement="${esc(id)}">Estado de cuenta PDF</button>`);
+}
+function accountStatement(id) {
+  const customer=client(id);if(!customer)return null;
+  const invoices=db.invoices.filter(i=>i.clientId===id),payments=db.payments.filter(p=>p.clientId===id);
+  const items=[...invoices.map(i=>({date:i.date,detail:`Factura ${i.number} - vence ${prettyDate(i.due)}`,debit:i.amount,credit:0,priority:0})),...payments.map(p=>({date:p.date,detail:`Pago${p.receipt?` / Recibo #${p.receipt.number}`:''}${p.note?` - ${p.note}`:''}`,debit:0,credit:p.amount,priority:1}))].sort((a,b)=>a.date.localeCompare(b.date)||a.priority-b.priority);
+  let running=customer.opening;
+  const rows=[{date:'',detail:'Saldo inicial',debit:Math.max(0,running),credit:Math.max(0,-running),balance:running},...items.map(item=>{running=round(running+item.debit-item.credit);return {...item,balance:running};})];
+  return {company:companyNames[companyId],customer:structuredClone(customer),generatedAt:new Date().toISOString(),today:date(),rows,invoiceTotal:round(invoices.reduce((sum,i)=>sum+i.amount,0)),paymentTotal:round(payments.reduce((sum,p)=>sum+p.amount,0)),balance:balance(id),pending:structuredClone(invoiceBalances(id).filter(i=>i.pending>0))};
+}
+function buildStatementPdf(statement,JsPDF) {
+  const doc=new JsPDF({unit:'mm',format:'a4'});
+  const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
+  const cash=value=>text(money(value));let y=18,section='movements';
+  doc.setProperties({title:`${statement.company} - Estado de cuenta - ${statement.customer.name}`,author:statement.company,subject:'Facturas y pagos de cuenta corriente'});
+  const pendingHeading=()=>{doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setFillColor(237,242,232);doc.text('FACTURAS PENDIENTES',14,y);y+=8;doc.rect(14,y-4,182,8,'F');doc.text('Factura',15,y+1);doc.text('Vence',122,y+1,{align:'right'});doc.text('Total factura',158,y+1,{align:'right'});doc.text('Pendiente',196,y+1,{align:'right'});y+=12;doc.setFont('helvetica','normal');};
+  const heading=()=>{
+    y=18;doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
+    const company=doc.splitTextToSize(text(statement.company),182);doc.text(company,14,y);y+=company.length*7;
+    doc.setFontSize(13);doc.text('ESTADO DE CUENTA',14,y);y+=7;
+    doc.setFontSize(11);const customer=doc.splitTextToSize(text(`Cliente: ${statement.customer.name}`),182);doc.text(customer,14,y);y+=customer.length*5+2;
+    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(text(`Generado: ${new Date(statement.generatedAt).toLocaleString('es-AR')}`),14,y);y+=7;
+    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setFillColor(237,242,232);
+    if(section==='movements'){doc.rect(14,y-4,182,8,'F');doc.text('Fecha',15,y+1);doc.text('Movimiento',39,y+1);doc.text('Debe',126,y+1,{align:'right'});doc.text('Haber',159,y+1,{align:'right'});doc.text('Saldo',196,y+1,{align:'right'});y+=12;}
+    if(section==='pending')pendingHeading();
+    doc.setFont('helvetica','normal');doc.setFontSize(9);
+  };
+  const page=()=>{doc.addPage();heading();};
+  const row=(description,paint,width,x=39)=>{
+    const lines=doc.splitTextToSize(text(description),width);let index=0;
+    while(index<lines.length){if(y+7>265)page();const available=Math.max(1,Math.floor((265-y)/4.5));const part=lines.slice(index,index+available);doc.text(part,x,y);if(index===0)paint(y);y+=part.length*4.5;index+=part.length;if(index<lines.length)page();}
+    doc.setDrawColor(225,230,222);doc.line(14,y,196,y);y+=6;
+  };
+  heading();
+  for(const movement of statement.rows)row(movement.detail,position=>{
+    doc.setFontSize(8);doc.text(movement.date?prettyDate(movement.date):'-',14,position);doc.text(movement.debit?cash(movement.debit):'-',126,position,{align:'right'});doc.text(movement.credit?cash(movement.credit):'-',159,position,{align:'right'});doc.text(cash(movement.balance),196,position,{align:'right'});doc.setFontSize(9);
+  },51);
+  section='summary';if(y+65>270)page();
+  const summary=(label,amount,bold=false)=>{if(y+8>270)page();doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(bold?12:10);doc.text(label,14,y);doc.text(cash(amount),196,y,{align:'right'});y+=8;};
+  summary('Saldo inicial',statement.customer.opening);summary('Total de facturas',statement.invoiceTotal);summary('Total de pagos',statement.paymentTotal);summary(statement.balance<0?'SALDO A FAVOR DEL CLIENTE':'SALDO PENDIENTE',Math.abs(statement.balance),true);
+  doc.setFont('helvetica','normal');doc.setFontSize(9);
+  const note='Saldo según todos los movimientos registrados. Los pedidos no generan deuda. Los pagos cubren primero saldo inicial y luego facturas por fecha de emisión.';
+  for(const line of doc.splitTextToSize(note,180)){if(y+5>270)page();doc.text(line,14,y);y+=5;}
+  section='pending';if(y+32>265)page();else{y+=8;pendingHeading();}
+  if(!statement.pending.length)doc.text('No hay facturas pendientes.',14,y);
+  for(const invoice of statement.pending)row(`${invoice.number}${invoice.due<statement.today?' - VENCIDA':''}`,position=>{doc.setFontSize(8);doc.text(prettyDate(invoice.due),122,position,{align:'right'});doc.text(cash(invoice.amount),158,position,{align:'right'});doc.text(cash(invoice.pending),196,position,{align:'right'});doc.setFontSize(9);},78,14);
+  const count=doc.getNumberOfPages();
+  for(let i=1;i<=count;i++){doc.setPage(i);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(110);doc.text('Importes en pesos argentinos. Estado de cuenta informativo, no válido como factura ni recibo.',14,282);doc.text(`${i} / ${count}`,196,288,{align:'right'});}
+  return doc;
+}
+async function downloadStatementPdf(id,button) {
+  const snapshot=accountStatement(id);if(!snapshot)return;
+  const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
+  try{const JsPDF=await loadPdfLibrary();const doc=buildStatementPdf(snapshot,JsPDF);const safe=value=>value.replace(/[^a-zA-Z0-9_-]/g,'-');presentPdf(doc,`${safe(snapshot.company)}-estado-de-cuenta-${safe(snapshot.customer.name)}-${snapshot.today}.pdf`,`Estado de cuenta - ${snapshot.company}`);}
+  catch(error){alert(`No se pudo generar el estado de cuenta. ${error.message}`);}
+  finally{if(button){button.disabled=false;button.textContent=original;}}
 }
 function renderAccounts(root) {
   root.innerHTML=`<div class="notice"><strong>Control de facturas ya emitidas, no facturación.</strong> Los pedidos no suman deuda, incluidos los anteriores. Se conservan los saldos iniciales y pagos registrados. Los pagos se aplican primero al saldo inicial y luego a las facturas más antiguas por fecha de emisión.</div><section class="panel"><div class="toolbar"><input id="invoice-search" placeholder="Buscar factura o cliente…" aria-label="Buscar facturas"><button class="primary" data-action="invoice">+ Cargar factura</button><button data-action="account-payment">Registrar pago</button></div><div class="field"><label for="invoice-filter">Mostrar</label><select id="invoice-filter"><option value="all">Todas las facturas</option><option value="pending">Pendientes</option><option value="overdue">Vencidas pendientes</option><option value="paid">Pagadas</option></select></div><div id="invoice-results"></div></section><section class="panel" style="margin-top:20px"><h2>Saldos por cliente</h2><div id="account-balances"></div></section>`;
@@ -342,6 +398,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.order)showOrder(b.dataset.order);
   if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   if(b.dataset.receipt)downloadReceiptPdf(b.dataset.receipt,b);
+  if(b.dataset.statement)downloadStatementPdf(b.dataset.statement,b);
   if(b.dataset.invoice)editInvoice(b.dataset.invoice);
   if(b.dataset.action==='invoice')editInvoice();
   if(b.dataset.action==='account-payment')chooseAccountPayment();
