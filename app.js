@@ -33,16 +33,21 @@ function toast(text) { $('#toast').textContent = text; $('#toast').hidden = fals
 function modal(title, html) { $('#modal-title').textContent = `${companyNames[companyId]} · ${title}`; $('#modal-body').innerHTML = html; if (!$('#modal').open) $('#modal').showModal(); }
 function close() { $('#modal').close(); }
 function client(id) { return db.clients.find(c => c.id === id); }
-function balance(id) { return round((client(id)?.opening || 0) + db.invoices.filter(i => i.clientId === id).reduce((s,i) => s+i.amount,0) - db.payments.filter(p => p.clientId === id).reduce((s,p) => s+p.amount,0)); }
+function activePayments(id) { return db.payments.filter(p=>p.clientId===id&&!p.voidedAt); }
+function cuitDigits(value) { return String(value??'').replace(/[\s-]/g,''); }
+function validCuit(value) { return value===''||/^\d{11}$/.test(value); }
+function formatCuit(value) {const digits=cuitDigits(value);return /^\d{11}$/.test(digits)?`${digits.slice(0,2)}-${digits.slice(2,10)}-${digits.slice(10)}`:digits;}
+function clientSearch(c) {return `${c.name} ${c.phone} ${c.cuit||''} ${formatCuit(c.cuit)} ${c.zone||''}`.toLowerCase();}
+function balance(id) { return round((client(id)?.opening || 0) + db.invoices.filter(i => i.clientId === id).reduce((s,i) => s+i.amount,0) - activePayments(id).reduce((s,p) => s+p.amount,0)); }
 function invoiceBalances(id) {
   // Pagos a cuenta: primero saldo inicial, luego facturas por fecha de emisión.
-  let credit=round(db.payments.filter(p=>p.clientId===id).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
+  let credit=round(activePayments(id).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
   credit=Math.max(0,credit);
   return db.invoices.filter(i=>i.clientId===id).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id)).map(i=>{const paid=round(Math.min(credit,i.amount));credit=round(credit-paid);return {...i,paid,pending:round(i.amount-paid)};});
 }
 function paymentApplications(id,amount) {
   const applications=[];let remaining=amount;
-  const payments=db.payments.filter(p=>p.clientId===id).reduce((sum,p)=>sum+p.amount,0);
+  const payments=activePayments(id).reduce((sum,p)=>sum+p.amount,0);
   const openingPending=round(Math.max(0,(client(id)?.opening||0)-payments));
   const openingPaid=round(Math.min(remaining,openingPending));
   if(openingPaid>0){applications.push({type:'opening',number:'Saldo inicial',amount:openingPaid});remaining=round(remaining-openingPaid);}
@@ -56,8 +61,8 @@ function paymentApplications(id,amount) {
 }
 function field(label, name, value = '', type = 'text', extra = '') { return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`; }
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
-function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button><br><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button></div>`; }
-function paymentRows(payments) {return payments.map(p=>`<tr><td><button class="primary" data-receipt="${esc(p.id)}">Recibo PDF${p.receipt?` #${p.receipt.number}`:''}</button></td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
+function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>${c.cuit?`<br><small>CUIT ${esc(formatCuit(c.cuit))}</small>`:''}${c.zone?`<br><small>Zona: ${esc(c.zone)}</small>`:''}<br><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button></div>`; }
+function paymentRows(payments) {return payments.map(p=>`<tr><td><div class="actions"><button class="primary" data-receipt="${esc(p.id)}">${p.voidedAt?'Recibo anulado':'Recibo PDF'}${p.receipt?` #${p.receipt.number}`:''}</button>${p.voidedAt?'<span class="badge pending">ANULADO · no afecta el saldo</span>':`<button style="color:#a13f2c" data-void-payment="${esc(p.id)}">Borrar pago</button>`}</div></td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
 function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function render() {
   const titles = {panel:'Resumen',clientes:'Clientes',productos:'Productos',pedidos:'Pedidos',cuentas:'Cuenta corriente',datos:'Importar y respaldar'};
@@ -70,8 +75,8 @@ function render() {
     root.innerHTML = `${!db.clients.length?'<div class="intro"><div><h2>Bienvenido a tu ferretería</h2><p>Empezá cargando tus clientes y productos. El descuento de cada cliente se aplica solo.</p></div><button data-action="import">Importar desde Excel ↗</button></div>':''}<div class="cards"><div class="card"><small>CLIENTES</small><div class="value">${db.clients.length}</div><small>Con su descuento personalizado</small></div><div class="card"><small>PEDIDOS PENDIENTES</small><div class="value">${db.orders.filter(o=>o.status==='Pendiente').length}</div><small>Para preparar y entregar</small></div><div class="card accent"><small>TOTAL POR COBRAR</small><div class="value">${money(owed)}</div><small>Saldos de cuentas de clientes</small></div></div><div class="grid"><section class="panel"><div class="section-head"><h2>Últimos pedidos</h2><button class="link" data-action="orders">Ver todos →</button></div>${table(['Pedido','Cliente','Fecha','Total','Estado'],orderRows(db.orders.slice().reverse().slice(0,6)),'Tus pedidos van a aparecer acá.')}</section><section class="panel"><h2>Clientes con saldo pendiente</h2>${table(['Cliente','Saldo'],db.clients.filter(c=>balance(c.id)>0).sort((a,b)=>balance(b.id)-balance(a.id)).slice(0,6).map(c=>`<tr><td>${clientButton(c)}</td><td>${money(balance(c.id))}</td></tr>`).join(''),'No hay saldos pendientes.')}</section></div>`;
   }
   if (view === 'clientes') {
-    root.innerHTML = `<section class="panel"><div class="toolbar"><input id="search" placeholder="Buscar por nombre o teléfono…" aria-label="Buscar clientes"><button data-action="client">+ Nuevo cliente</button></div><div id="results"></div></section>`;
-    const update = () => { const q = $('#search').value.toLowerCase(); const clients = db.clients.filter(c=>`${c.name} ${c.phone}`.toLowerCase().includes(q)); $('#results').innerHTML = table(['Cliente','Teléfono','Descuento','Saldo',''],clients.map(c=>`<tr><td>${clientButton(c)}</td><td>${esc(c.phone || '—')}</td><td><span class="badge">${c.discount}%</span></td><td>${money(balance(c.id))}</td><td><button class="link" data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''),'Agregá tu primer cliente o importalo desde Excel.'); }; $('#search').oninput = update; update();
+    root.innerHTML = `<section class="panel"><div class="toolbar"><input id="search" placeholder="Buscar nombre, teléfono, CUIT o zona…" aria-label="Buscar clientes"><button data-action="client">+ Nuevo cliente</button></div><div class="field"><label for="zone-filter">Zona</label><select id="zone-filter"><option value="">Todas las zonas</option>${[...new Set(db.clients.map(c=>c.zone||'').filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es')).map(zone=>`<option value="${esc(zone)}">${esc(zone)}</option>`).join('')}</select></div><div id="results"></div></section>`;
+    const update = () => { const q = $('#search').value.toLowerCase(),zone=$('#zone-filter').value; const clients = db.clients.filter(c=>clientSearch(c).includes(q)&&(!zone||c.zone===zone)); $('#results').innerHTML = table(['Cliente','Teléfono','Descuento','Saldo',''],clients.map(c=>`<tr><td>${clientButton(c)}</td><td>${esc(c.phone || '—')}</td><td><span class="badge">${c.discount}%</span></td><td>${money(balance(c.id))}</td><td><button class="link" data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''),'No hay clientes para mostrar. Podés agregar uno o importarlo desde Excel.'); }; $('#search').oninput = update;$('#zone-filter').onchange=update; update();
   }
   if (view === 'productos') {
     root.innerHTML = `<section class="panel"><div class="toolbar"><input id="search" placeholder="Buscar por código o descripción…" aria-label="Buscar productos"><button data-action="product">+ Nuevo producto</button></div><div id="results"></div></section>`;
@@ -85,18 +90,20 @@ function render() {
 }
 function editClient(id) {
   const c = client(id) || {name:'',phone:'',address:'',discount:0,opening:0,notes:'',followup:''};
-  modal(id?'Editar cliente':'Nuevo cliente',`<form id="client-form"><div class="form-grid">${field('Nombre *','name',c.name,'text','required maxlength="150"')}${field('Teléfono','phone',c.phone,'tel')}${field('Dirección','address',c.address)}${field('Descuento personal (%)','discount',c.discount,'number','required min="0" max="100" step="0.01"')}${field('Saldo inicial ($)','opening',c.opening,'number','required step="0.01"')}${field('Recordatorio de seguimiento','followup',c.followup,'date')}</div><div class="field"><label for="notes">Notas</label><textarea id="notes" name="notes">${esc(c.notes)}</textarea></div><p class="help">El saldo inicial es la deuda anterior a usar esta app; un valor negativo representa saldo a favor. El descuento solo afecta pedidos nuevos.</p><div class="form-actions"><button class="primary">Guardar cliente</button></div></form>`);
-  $('#client-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); const record = {id:id||uid(),name:f.get('name').trim(),phone:f.get('phone').trim(),address:f.get('address').trim(),discount:Number(f.get('discount')),opening:round(Number(f.get('opening'))),notes:f.get('notes').trim(),followup:f.get('followup')}; if (!record.name) return; if(commit(n=> {const i=n.clients.findIndex(x=>x.id===id); if(i<0)n.clients.push(record);else n.clients[i]=record;})) {close();render();toast('Cliente guardado');} };
+  modal(id?'Editar cliente':'Nuevo cliente',`<form id="client-form"><div class="form-grid">${field('Nombre *','name',c.name,'text','required maxlength="150"')}${field('CUIT (opcional)','cuit',formatCuit(c.cuit),'text','inputmode="numeric" maxlength="13" placeholder="20-12345678-6"')}${field('Zona','zone',c.zone||'','text','maxlength="100" placeholder="Ej.: Norte, Centro, Ruta 8"')}${field('Teléfono','phone',c.phone,'tel')}${field('Dirección','address',c.address)}${field('Descuento personal (%)','discount',c.discount,'number','required min="0" max="100" step="0.01"')}${field('Saldo inicial ($)','opening',c.opening,'number','required step="0.01"')}${field('Recordatorio de seguimiento','followup',c.followup,'date')}</div><div class="field"><label for="notes">Notas</label><textarea id="notes" name="notes">${esc(c.notes)}</textarea></div><p class="help">CUIT: 11 dígitos, con o sin guiones. El saldo inicial es la deuda anterior a usar esta app; un valor negativo representa saldo a favor. El descuento solo afecta pedidos nuevos.</p><div class="form-actions"><button class="primary">Guardar cliente</button></div></form>`);
+  $('#client-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); const record = {id:id||uid(),name:f.get('name').trim(),cuit:cuitDigits(f.get('cuit')),zone:f.get('zone').trim(),phone:f.get('phone').trim(),address:f.get('address').trim(),discount:Number(f.get('discount')),opening:round(Number(f.get('opening'))),notes:f.get('notes').trim(),followup:f.get('followup')}; if (!record.name) return;if(!validCuit(record.cuit))return alert('El CUIT debe tener 11 dígitos, o quedar vacío.'); if(commit(n=> {const i=n.clients.findIndex(x=>x.id===id); if(i<0)n.clients.push(record);else n.clients[i]=record;})) {close();render();toast('Cliente guardado');} };
 }
 function showClient(id) {
   const c = client(id); if(!c)return;
-  const movements = [...db.invoices.filter(i=>i.clientId===id).map(i=>({date:i.date,detail:`Factura ${i.number} · vence ${prettyDate(i.due)}`,amount:i.amount})),...db.payments.filter(p=>p.clientId===id).map(p=>({date:p.date,detail:`Pago · ${p.note||'Sin detalle'}`,amount:-p.amount}))].sort((a,b)=>a.date.localeCompare(b.date));
+  const movements = [...db.invoices.filter(i=>i.clientId===id).map(i=>({date:i.date,detail:`Factura ${i.number} · vence ${prettyDate(i.due)}`,amount:i.amount})),...activePayments(id).map(p=>({date:p.date,detail:`Pago · ${p.note||'Sin detalle'}`,amount:-p.amount}))].sort((a,b)=>a.date.localeCompare(b.date));
   modal(c.name,`<div class="actions"><span class="badge">Descuento: ${c.discount}%</span><button data-edit-client="${esc(id)}">Editar cliente</button><button class="primary" data-payment="${esc(id)}">Registrar pago</button></div><p>${esc(c.phone)}${c.address?` · ${esc(c.address)}`:''}</p><p class="muted">${esc(c.notes)}</p>${c.followup?`<p class="notice">Seguimiento: ${prettyDate(c.followup)}</p>`:''}<small>SALDO ACTUAL · positivo: debe / negativo: a favor</small><div class="balance">${money(balance(id))}</div>${table(['Fecha','Movimiento','Importe'],`<tr><td>—</td><td>Saldo inicial</td><td>${money(c.opening)}</td></tr>`+movements.map(m=>`<tr><td>${prettyDate(m.date)}</td><td>${esc(m.detail)}</td><td>${money(m.amount)}</td></tr>`).join(''))}`);
   $('#modal-body .actions').insertAdjacentHTML('beforeend',`<button data-statement="${esc(id)}">Estado de cuenta PDF</button>`);
+  $('#modal-body .actions').insertAdjacentHTML('afterend',`<p>${c.cuit?`CUIT: ${esc(formatCuit(c.cuit))}`:''}${c.zone?` · Zona: ${esc(c.zone)}`:''}</p>`);
+  $('#modal-body').insertAdjacentHTML('beforeend',`<h3 style="margin-top:20px">Pagos y recibos</h3>${table(['Recibo / acciones','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>p.clientId===id).slice().reverse()),'Todavía no hay pagos.')}`);
 }
 function accountStatement(id) {
   const customer=client(id);if(!customer)return null;
-  const invoices=db.invoices.filter(i=>i.clientId===id),payments=db.payments.filter(p=>p.clientId===id);
+  const invoices=db.invoices.filter(i=>i.clientId===id),payments=activePayments(id);
   const items=[...invoices.map(i=>({date:i.date,detail:`Factura ${i.number} - vence ${prettyDate(i.due)}`,debit:i.amount,credit:0,priority:0})),...payments.map(p=>({date:p.date,detail:`Pago${p.receipt?` / Recibo #${p.receipt.number}`:''}${p.note?` - ${p.note}`:''}`,debit:0,credit:p.amount,priority:1}))].sort((a,b)=>a.date.localeCompare(b.date)||a.priority-b.priority);
   let running=customer.opening;
   const rows=[{date:'',detail:'Saldo inicial',debit:Math.max(0,running),credit:Math.max(0,-running),balance:running},...items.map(item=>{running=round(running+item.debit-item.credit);return {...item,balance:running};})];
@@ -113,7 +120,10 @@ function buildStatementPdf(statement,JsPDF) {
     const company=doc.splitTextToSize(text(statement.company),182);doc.text(company,14,y);y+=company.length*7;
     doc.setFontSize(13);doc.text('ESTADO DE CUENTA',14,y);y+=7;
     doc.setFontSize(11);const customer=doc.splitTextToSize(text(`Cliente: ${statement.customer.name}`),182);doc.text(customer,14,y);y+=customer.length*5+2;
-    doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text(text(`Generado: ${new Date(statement.generatedAt).toLocaleString('es-AR')}`),14,y);y+=7;
+    doc.setFont('helvetica','normal');doc.setFontSize(9);
+    if(statement.customer.cuit){doc.text(text(`CUIT: ${formatCuit(statement.customer.cuit)}`),14,y);y+=5;}
+    if(statement.customer.zone){const zones=doc.splitTextToSize(text(`Zona: ${statement.customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*4.5;}
+    doc.setFontSize(8);doc.text(text(`Generado: ${new Date(statement.generatedAt).toLocaleString('es-AR')}`),14,y);y+=7;
     doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setFillColor(237,242,232);
     if(section==='movements'){doc.rect(14,y-4,182,8,'F');doc.text('Fecha',15,y+1);doc.text('Movimiento',39,y+1);doc.text('Debe',126,y+1,{align:'right'});doc.text('Haber',159,y+1,{align:'right'});doc.text('Saldo',196,y+1,{align:'right'});y+=12;}
     if(section==='pending')pendingHeading();
@@ -154,10 +164,10 @@ function renderAccounts(root) {
   root.insertAdjacentHTML('beforeend','<section class="panel" style="margin-top:20px"><h2>Pagos y recibos</h2><div id="receipt-history"></div></section>');
   const update=()=>{
     const q=$('#invoice-search').value.toLowerCase(),filter=$('#invoice-filter').value;
-    const invoices=db.clients.flatMap(c=>invoiceBalances(c.id)).filter(i=>`${i.number} ${client(i.clientId)?.name}`.toLowerCase().includes(q)).filter(i=>filter==='pending'?i.pending>0:filter==='overdue'?i.pending>0&&i.due<date():filter==='paid'?i.pending===0:true).sort((a,b)=>a.due.localeCompare(b.due));
+    const invoices=db.clients.flatMap(c=>invoiceBalances(c.id)).filter(i=>`${i.number} ${clientSearch(client(i.clientId))}`.toLowerCase().includes(q)).filter(i=>filter==='pending'?i.pending>0:filter==='overdue'?i.pending>0&&i.due<date():filter==='paid'?i.pending===0:true).sort((a,b)=>a.due.localeCompare(b.due));
     $('#invoice-results').innerHTML=table(['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Estado'],invoices.map(i=>`<tr><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td><span class="badge ${i.pending>0?'pending':''}">${i.pending===0?'Pagada':i.due<date()?'Vencida':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`).join(''),'No hay facturas para mostrar. Cargá una factura ya emitida; los pedidos no se convierten en facturas.');
-    $('#account-balances').innerHTML=table(['Cliente','Saldo inicial','Saldo actual',''],db.clients.filter(c=>`${c.name} ${c.phone}`.toLowerCase().includes(q)).map(c=>`<tr><td>${clientButton(c)}</td><td>${money(c.opening)}</td><td>${money(balance(c.id))}</td><td><button data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''));
-    $('#receipt-history').innerHTML=table(['Recibo','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>`${client(p.clientId)?.name} ${p.receipt?.number||''} ${p.note}`.toLowerCase().includes(q)).slice().reverse()),'Todavía no hay pagos registrados.');
+    $('#account-balances').innerHTML=table(['Cliente','Saldo inicial','Saldo actual',''],db.clients.filter(c=>clientSearch(c).includes(q)).map(c=>`<tr><td>${clientButton(c)}</td><td>${money(c.opening)}</td><td>${money(balance(c.id))}</td><td><button data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''));
+    $('#receipt-history').innerHTML=table(['Recibo / acciones','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>`${clientSearch(client(p.clientId))} ${p.receipt?.number||''} ${p.note}`.toLowerCase().includes(q)).slice().reverse()),'Todavía no hay pagos registrados.');
   };$('#invoice-search').oninput=update;$('#invoice-filter').onchange=update;update();
 }
 function editInvoice(id) {
@@ -182,8 +192,19 @@ function payment(id) {
   $('#payment-form').onsubmit=e=>{
     e.preventDefault();const f=new FormData(e.target);const amount=round(Number(f.get('amount')));if(!Number.isFinite(amount)||amount<=0)return;
     const before=balance(id),after=round(before-amount);if(!Number.isFinite(before)||!Number.isFinite(after))return alert('Revisá los importes de la cuenta.');
-    const record={id:uid(),clientId:id,amount,date:f.get('date'),note:f.get('note').trim(),receipt:{number:Math.max(0,...db.payments.map(p=>p.receipt?.number||0))+1,balanceBefore:before,balanceAfter:after,issuedAt:new Date().toISOString(),companyName:companyNames[companyId],clientName:c.name,clientPhone:c.phone,clientAddress:c.address,applications:paymentApplications(id,amount)}};
+    const record={id:uid(),clientId:id,amount,date:f.get('date'),note:f.get('note').trim(),receipt:{number:Math.max(0,...db.payments.map(p=>p.receipt?.number||0))+1,balanceBefore:before,balanceAfter:after,issuedAt:new Date().toISOString(),companyName:companyNames[companyId],clientName:c.name,clientPhone:c.phone,clientAddress:c.address,clientCuit:c.cuit||'',clientZone:c.zone||'',applications:paymentApplications(id,amount)}};
     if(commit(n=>n.payments.push(record))){render();modal('Pago registrado',`<p>Se recibió <strong>${money(amount)}</strong> de ${esc(c.name)}.</p><div class="order-summary"><div class="summary-row"><span>Saldo anterior</span><span>${money(before)}</span></div><div class="summary-row total"><span>Saldo restante</span><span>${money(after)}</span></div></div><p class="help">Saldo positivo: pendiente de cobro. Saldo negativo: a favor del cliente. Saldos al momento de registrar este pago.</p><button class="primary" data-receipt="${esc(record.id)}">Descargar recibo PDF #${record.receipt.number}</button>`);}
+  };
+}
+function voidPayment(id) {
+  const p=db.payments.find(p=>p.id===id);if(!p||p.voidedAt)return;
+  const owner=companyId;
+  modal('¿Borrar este pago?',`<p>Cliente: <strong>${esc(client(p.clientId)?.name)}</strong><br>Fecha: ${prettyDate(p.date)}<br>Importe: <strong>${money(p.amount)}</strong></p><p class="notice">El pago quedará <strong>anulado</strong> y dejará de descontarse del saldo. Las facturas pendientes se recalcularán. Se conserva el historial y el número del recibo no se reutiliza.</p><p>Saldo actual: ${money(balance(p.clientId))}<br>Saldo después de anular: <strong>${money(round(balance(p.clientId)+p.amount))}</strong></p><p class="help">Si ya entregaste el recibo, informá su anulación al cliente. Los PDF descargados anteriormente no se pueden modificar.</p><div class="form-actions"><button id="cancel-void-payment">Cancelar</button><button id="confirm-void-payment" style="background:#a13f2c;color:white">Sí, borrar pago</button></div>`);
+  $('#cancel-void-payment').onclick=close;
+  $('#confirm-void-payment').onclick=()=>{
+    if(owner!==companyId)return;
+    const current=db.payments.find(item=>item.id===id);if(!current||current.voidedAt)return;
+    if(commit(next=>{next.payments.find(item=>item.id===id).voidedAt=new Date().toISOString();})){close();view='cuentas';render();toast('Pago anulado. Saldo y facturas recalculados.');}
   };
 }
 function newOrder() {
@@ -231,6 +252,8 @@ function buildOrderPdf(order, customer, company, JsPDF) {
     doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
     doc.setTextColor(35,55,47);doc.setFont('helvetica','normal');doc.setFontSize(10);
     const customerLines=doc.splitTextToSize(`Cliente: ${text(customer?.name||'Cliente')}`,182);doc.text(customerLines,14,y);y+=customerLines.length*5+3;
+    if(customer?.cuit){doc.text(`CUIT: ${formatCuit(customer.cuit)}`,14,y);y+=5;}
+    if(customer?.zone){const zones=doc.splitTextToSize(text(`Zona: ${customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*5;}
     doc.setFillColor(237,242,232);doc.rect(14,y-4,182,8,'F');doc.setFont('helvetica','bold');doc.setFontSize(9);
     doc.text('Código / descripción',16,y+1);doc.text('Cant.',105,y+1,{align:'right'});doc.text('Precio lista',148,y+1,{align:'right'});doc.text('Importe',194,y+1,{align:'right'});y+=12;
     doc.setFont('helvetica','normal');
@@ -273,10 +296,13 @@ function buildReceiptPdf(payment,customer,company,JsPDF) {
     doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(size);
     for(const line of doc.splitTextToSize(text(value),180)){if(y>267){doc.addPage();y=20;}doc.text(line,15,y);y+=size*.5+2;}
   };
-  const title=r?`RECIBO DE PAGO N° ${r.number}`:'CONSTANCIA DE PAGO REGISTRADO';
+  const title=(payment.voidedAt?'ANULADO - ':'')+(r?`RECIBO DE PAGO N° ${r.number}`:'CONSTANCIA DE PAGO REGISTRADO');
   doc.setProperties({title:`${company} - ${title}`,author:company,subject:'Cuenta corriente - comprobante no fiscal'});
   write(company,20,true);write(title,15,true);write(`Fecha del pago: ${prettyDate(payment.date)}`);
+  if(payment.voidedAt)write(`PAGO ANULADO el ${new Date(payment.voidedAt).toLocaleString('es-AR')}. Este documento NO acredita un pago vigente.`,12,true);
   write(`Cliente: ${r?.clientName||customer.name||'Cliente'}`,12,true);
+  const customerCuit=r?r.clientCuit:customer.cuit,customerZone=r?r.clientZone:customer.zone;
+  if(customerCuit)write(`CUIT: ${formatCuit(customerCuit)}`);if(customerZone)write(`Zona: ${customerZone}`);
   const phone=r?r.clientPhone:customer.phone,address=r?r.clientAddress:customer.address;
   if(phone)write(`Teléfono: ${phone}`);if(address)write(`Dirección: ${address}`);y+=5;
   write(`Importe recibido: ${money(payment.amount)}`,15,true);
@@ -299,7 +325,7 @@ function buildReceiptPdf(payment,customer,company,JsPDF) {
   write('Pago a cuenta corriente. No emite una factura ni modifica pedidos.',10);
   if(r)write(`Registrado: ${new Date(r.issuedAt).toLocaleString('es-AR')}`,9);
   write(`Referencia de pago: ${payment.id}`,8);
-  const count=doc.getNumberOfPages();for(let i=1;i<=count;i++){doc.setPage(i);doc.setFontSize(8);doc.setFont('helvetica','normal');doc.text('Comprobante interno de pago. No válido como factura fiscal. Importes en pesos argentinos.',15,281);doc.text(`${i} / ${count}`,195,288,{align:'right'});}
+  const count=doc.getNumberOfPages();for(let i=1;i<=count;i++){doc.setPage(i);doc.setFontSize(8);doc.setFont('helvetica','normal');doc.text(payment.voidedAt?'ANULADO - Este documento no acredita un pago vigente.':'Comprobante interno de pago. No válido como factura fiscal. Importes en pesos argentinos.',15,281);doc.text(`${i} / ${count}`,195,288,{align:'right'});}
   return doc;
 }
 async function downloadReceiptPdf(id,button) {
@@ -328,7 +354,7 @@ function renderData(root) {
   $('#backup').onclick=()=>download(`ferreteria-respaldo-${date()}.json`,JSON.stringify(db,null,2),'application/json');
   $('#backup').insertAdjacentHTML('beforebegin','<p class="help">El respaldo también incluye facturas y recibos. Los PDF, las importaciones y los respaldos se pueden generar sin conexión una vez preparada la app. Para enviar por WhatsApp o correo necesitás conexión.</p>');
   $('#content').querySelectorAll('.help').forEach(p=>{if(p.textContent.includes('lector. CSV funciona'))p.textContent='Excel y CSV funcionan sin internet cuando la app indica «Lista para usar sin conexión».';});
-  $('#template').onclick=()=>{const products=$('#import-type').value==='products';download(products?'plantilla-productos.csv':'plantilla-clientes.csv','\uFEFF'+(products?'codigo;descripcion;precio\r\nTOR001;Tornillo 6 mm;150,50\r\n':'nombre;telefono;direccion;descuento;saldo\r\nCliente ejemplo;1123456789;Calle 123;10;0\r\n'),'text/csv;charset=utf-8');};
+  $('#template').onclick=()=>{const products=$('#import-type').value==='products';download(products?'plantilla-productos.csv':'plantilla-clientes.csv','\uFEFF'+(products?'codigo;descripcion;precio\r\nTOR001;Tornillo 6 mm;150,50\r\n':'nombre;cuit;zona;telefono;direccion;descuento;saldo\r\nCliente ejemplo;;Centro;1123456789;Calle 123;10;0\r\n'),'text/csv;charset=utf-8');};
   $('#import-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;const type=$('#import-type').value;try{if(/\.csv$/i.test(file.name)){const text=await file.text();mapImport(type,parseCSV(text));}else{if(!globalThis.XLSX)throw Error('No se cargó el lector local de Excel. Conectate y prepará la app para uso sin conexión, o usá CSV.');const book=XLSX.read(await file.arrayBuffer(),{type:'array'});chooseSheet(type,book);}}catch(err){alert(`No se pudo abrir el archivo: ${err.message}`);}finally{e.target.value='';}};
   $('#restore').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{const next=JSON.parse(await file.text());validateBackup(next);next.invoices ??= [];if(!confirm(`Se reemplazarán TODOS los datos de esta empresa por ${next.clients.length} clientes, ${next.products.length} productos, ${next.orders.length} pedidos, ${next.invoices.length} facturas y ${next.payments.length} pagos. ¿Continuar?`))return;const blocked=storageBlocked;storageBlocked=false;if(persist(next)){$('#storage-warning').hidden=true;render();toast('Respaldo restaurado');}else storageBlocked=blocked;}catch(err){alert(`Respaldo no válido: ${err.message}`);}finally{e.target.value='';}};
 }
@@ -352,7 +378,7 @@ function mapImport(type,rows) {
   }
   if(rows.length<2)throw Error('El archivo necesita una fila de encabezados y al menos una fila de datos.');
   const headers=rows[0].map(String);
-  const fields=type==='products'?[['code','Código *',['codigo','cod','sku']],['name','Descripción *',['descripcion','producto','nombre']],['price','Precio *',['precio','precio de lista','precio lista']]]:[['name','Nombre *',['nombre','cliente','razon social']],['phone','Teléfono',['telefono','celular']],['address','Dirección',['direccion','domicilio']],['discount','Descuento %',['descuento','descuento %','dto']],['opening','Saldo inicial',['saldo','saldo inicial','deuda']]];
+  const fields=type==='products'?[['code','Código *',['codigo','cod','sku']],['name','Descripción *',['descripcion','producto','nombre']],['price','Precio *',['precio','precio de lista','precio lista']]]:[['name','Nombre *',['nombre','cliente','razon social']],['cuit','CUIT',['cuit','cuit/cuil','cuit cuil']],['zone','Zona',['zona','region','sector']],['phone','Teléfono',['telefono','celular']],['address','Dirección',['direccion','domicilio']],['discount','Descuento %',['descuento','descuento %','dto']],['opening','Saldo inicial',['saldo','saldo inicial','deuda']]];
   modal('Asociar columnas',`<p>Se detectaron <strong>${rows.length-1} filas</strong>. La primera fila se usa como encabezado.</p><div class="mapping">${fields.map(([key,label,aliases])=>{const found=headers.findIndex(h=>aliases.includes(normalize(h)));return `<div class="field"><label for="map-${key}">${label}</label><select id="map-${key}"><option value="">No importar</option>${headers.map((h,i)=>`<option value="${i}" ${i===found?'selected':''}>${esc(h||`Columna ${i+1}`)}</option>`).join('')}</select></div>`;}).join('')}</div><p class="help">Vista de las primeras filas:</p>${table(headers.map(esc),rows.slice(1,4).map(r=>`<tr>${headers.map((_,i)=>`<td>${esc(r[i])}</td>`).join('')}</tr>`).join(''))}<p class="notice">Los números con coma se interpretan con formato argentino: 1.250,50. Si no asociás una columna opcional, el valor existente se conserva. El descuento debe estar expresado entre 0 y 100 (10 significa 10%).</p><button id="check-import" class="primary">Revisar importación</button>`);
   $('#check-import').onclick=()=>{
     const mapping=Object.fromEntries(fields.map(([key])=>[key,$(`#map-${key}`).value]));
@@ -362,9 +388,9 @@ function mapImport(type,rows) {
     rows.slice(1).forEach((r,i)=>{const get=k=>mapping[k]===''?'':r[Number(mapping[k])]??'';const name=String(get('name')).trim();const key=String(type==='products'?get('code'):name).trim();if(!name||!key){errors.push(`Fila ${i+2}: faltan nombre o código.`);return;}const matchKey=key.toLowerCase();if(type==='clients' && seen.has(matchKey)){errors.push(`Fila ${i+2}: ${key} está repetido en el archivo.`);return;}seen.add(matchKey);
       if(type==='products' && ['','-'].includes(String(get('price')).trim())){skipped.push(`${key} · ${name}`);return;}
       const list=next[type];const existing=type==='products'?list.find(x=>x.code.toLowerCase()===matchKey && !usedProducts.has(x.id)):list.find(x=>x.name.toLowerCase()===matchKey);
-      const record=existing?{...existing}:type==='products'?{id:uid(),code:key,name,price:0}:{id:uid(),name,phone:'',address:'',discount:0,opening:0,notes:'',followup:''};record.name=name;
+      const record=existing?{...existing}:type==='products'?{id:uid(),code:key,name,price:0}:{id:uid(),name,cuit:'',zone:'',phone:'',address:'',discount:0,opening:0,notes:'',followup:''};record.name=name;
       if(type==='products'){record.code=key;record.price=round(parseNumber(get('price'),NaN));if(!Number.isFinite(record.price)||record.price<0){errors.push(`Fila ${i+2}: precio inválido.`);return;}}
-      else{for(const k of ['phone','address'])if(mapping[k]!=='')record[k]=String(get(k)).trim();for(const k of ['discount','opening'])if(mapping[k]!=='')record[k]=round(parseNumber(get(k)));if(!Number.isFinite(record.discount)||record.discount<0||record.discount>100||!Number.isFinite(record.opening)){errors.push(`Fila ${i+2}: descuento o saldo inválido.`);return;}}
+      else{for(const k of ['phone','address','zone'])if(mapping[k]!=='')record[k]=String(get(k)).trim();if(mapping.cuit!=='')record.cuit=cuitDigits(get('cuit'));if(!validCuit(record.cuit||'')||(record.zone||'').length>100){errors.push(`Fila ${i+2}: CUIT debe tener 11 dígitos o quedar vacío; zona admite hasta 100 caracteres.`);return;}for(const k of ['discount','opening'])if(mapping[k]!=='')record[k]=round(parseNumber(get(k)));if(!Number.isFinite(record.discount)||record.discount<0||record.discount>100||!Number.isFinite(record.opening)){errors.push(`Fila ${i+2}: descuento o saldo inválido.`);return;}}
       if(type==='products')usedProducts.add(record.id);
       if(existing){list[list.indexOf(existing)]=record;updated++;}else{list.push(record);added++;}
     });
@@ -378,12 +404,15 @@ function validateBackup(data) {
   if(data.invoices!==undefined&&!Array.isArray(data.invoices))fail();
   for(const key of ['clients','products','orders','payments','invoices']){const ids=new Set();for(const item of data[key]||[]){if(!item||!text(item.id)||!item.id||ids.has(item.id))fail();ids.add(item.id);}}
   for(const c of data.clients)if(!text(c.name)||!c.name.trim()||!['phone','address','notes','followup'].every(k=>text(c[k]))||!finite(c.discount)||c.discount<0||c.discount>100||!finite(c.opening))fail();
+  for(const c of data.clients)if((c.cuit!==undefined&&(!text(c.cuit)||!validCuit(c.cuit)))||(c.zone!==undefined&&(!text(c.zone)||c.zone.length>100)))fail();
   for(const p of data.products)if(!text(p.code)||!text(p.name)||!finite(p.price)||p.price<0)fail();
   const clients=new Set(data.clients.map(c=>c.id));const numbers=new Set();
   for(const o of data.orders){if(!clients.has(o.clientId)||!validDate(o.date)||!Number.isInteger(o.number)||o.number<1||numbers.has(o.number)||!['Pendiente','Preparado','Entregado'].includes(o.status)||!text(o.notes)||!Array.isArray(o.lines)||!o.lines.length||!['subtotal','discount','discountAmount','total'].every(k=>finite(o[k])&&o[k]>=0)||o.discount>100)fail();numbers.add(o.number);for(const l of o.lines)if(!text(l.name)||!text(l.code)||!text(l.productId)||!finite(l.qty)||l.qty<=0||!finite(l.price)||l.price<0)fail();const subtotal=round(o.lines.reduce((s,l)=>s+round(l.qty*l.price),0));if(Math.abs(subtotal-o.subtotal)>.001||Math.abs(round(subtotal*o.discount/100)-o.discountAmount)>.001||Math.abs(round(subtotal-o.discountAmount)-o.total)>.001)fail();}
   for(const p of data.payments)if(!clients.has(p.clientId)||!finite(p.amount)||p.amount<=0||!validDate(p.date)||!text(p.note))fail();
+  for(const p of data.payments)if(p.voidedAt!==undefined&&(!text(p.voidedAt)||!p.voidedAt||Number.isNaN(new Date(p.voidedAt).getTime())))fail();
   const receiptNumbers=new Set();
   for(const p of data.payments){if(p.receipt===undefined)continue;const r=p.receipt;if(!r||!Number.isInteger(r.number)||r.number<1||receiptNumbers.has(r.number)||!finite(r.balanceBefore)||!finite(r.balanceAfter)||Math.abs(round(r.balanceBefore-p.amount)-r.balanceAfter)>.001||!['issuedAt','companyName','clientName','clientPhone','clientAddress'].every(k=>text(r[k]))||Number.isNaN(new Date(r.issuedAt).getTime()))fail();receiptNumbers.add(r.number);}
+  for(const p of data.payments){const r=p.receipt;if(r&&((r.clientCuit!==undefined&&(!text(r.clientCuit)||!validCuit(r.clientCuit)))||(r.clientZone!==undefined&&(!text(r.clientZone)||r.clientZone.length>100))))fail();}
   for(const p of data.payments){const applications=p.receipt?.applications;if(applications===undefined)continue;if(!Array.isArray(applications)||!applications.length)fail();for(const a of applications){if(!a||!['invoice','opening','advance'].includes(a.type)||!text(a.number)||!a.number.trim()||!finite(a.amount)||a.amount<=0)fail();if(a.type==='invoice'&&(!text(a.invoiceId)||!a.invoiceId||!finite(a.invoiceAmount)||a.invoiceAmount<=0||!finite(a.pendingAfter)||a.pendingAfter<0||a.pendingAfter>a.invoiceAmount||a.amount>a.invoiceAmount))fail();}if(Math.abs(round(applications.reduce((sum,a)=>sum+a.amount,0))-p.amount)>.001)fail();}
   const invoiceKeys=new Set();
   for(const i of data.invoices||[]){if(!clients.has(i.clientId)||!text(i.number)||!i.number.trim()||!finite(i.amount)||i.amount<=0||!validDate(i.date)||!validDate(i.due)||i.due<i.date||!text(i.notes))fail();const key=JSON.stringify([i.clientId,i.number.trim().toLowerCase()]);if(invoiceKeys.has(key))fail();invoiceKeys.add(key);}
@@ -399,6 +428,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   if(b.dataset.receipt)downloadReceiptPdf(b.dataset.receipt,b);
   if(b.dataset.statement)downloadStatementPdf(b.dataset.statement,b);
+  if(b.dataset.voidPayment)voidPayment(b.dataset.voidPayment);
   if(b.dataset.invoice)editInvoice(b.dataset.invoice);
   if(b.dataset.action==='invoice')editInvoice();
   if(b.dataset.action==='account-payment')chooseAccountPayment();
