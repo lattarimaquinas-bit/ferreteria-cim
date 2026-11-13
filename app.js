@@ -42,6 +42,30 @@ function validEmail(value) { return value===''||(value.length<=254&&/^[^\s@]+@[^
 function formatCuit(value) {const digits=cuitDigits(value);return /^\d{11}$/.test(digits)?`${digits.slice(0,2)}-${digits.slice(2,10)}-${digits.slice(10)}`:digits;}
 function clientSearch(c) {return `${c.name} ${c.phone} ${c.email||''} ${c.cuit||''} ${formatCuit(c.cuit)} ${c.zone||''}`.toLowerCase();}
 function balance(id) { return round((client(id)?.opening || 0) + db.invoices.filter(i => i.clientId === id).reduce((s,i) => s+i.amount,0) - activePayments(id).reduce((s,p) => s+p.amount,0)); }
+function daysOverdue(due,today=date()) {
+  // Días calendario: UTC evita diferencias por horario de verano.
+  return Math.max(0,Math.round((Date.parse(`${today}T00:00:00Z`)-Date.parse(`${due}T00:00:00Z`))/86400000));
+}
+function zoneDebts() {
+  const zones=new Map();
+  for(const c of db.clients){
+    const debt=Math.max(0,balance(c.id));if(!debt)continue;
+    const zone=(c.zone||'').trim(),key=zone.toLocaleLowerCase('es');
+    const group=zones.get(key)||{zone:zone||'Sin zona',clients:0,total:0};
+    group.clients++;group.total=round(group.total+debt);zones.set(key,group);
+  }
+  return [...zones.values()].sort((a,b)=>a.zone.localeCompare(b.zone,'es'));
+}
+function zoneDebtPanel() {
+  return `<section class="panel" style="margin-top:20px;margin-bottom:20px"><h2>Deuda total por zona</h2><p class="help">Empresa activa · incluye saldo inicial, facturas y pagos. Los saldos a favor de otros clientes no descuentan deuda. Los clientes sin zona se agrupan en «Sin zona». No depende de los filtros de facturas.</p>${table(['Zona','Clientes con deuda','Total por cobrar'],zoneDebts().map(z=>`<tr><td>${esc(z.zone)}</td><td>${z.clients}</td><td>${money(z.total)}</td></tr>`).join(''),'No hay deuda pendiente.')}</section>`;
+}
+function invoiceRows(invoices,today=date()) {
+  return invoices.map(i=>{
+    const days=daysOverdue(i.due,today),late=i.pending>0&&days>30;
+    return `<tr class="${late?'invoice-overdue':''}"><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td>${i.pending===0?'—':`${days} día${days===1?'':'s'}`}</td><td><span class="badge ${late?'overdue-alert':i.pending>0?'pending':''}">${i.pending===0?'Pagada':late?'Alerta: más de 30 días':days>0?'Vencida':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`;
+  }).join('');
+}
+const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días de atraso','Estado'];
 function invoiceBalances(id) {
   // Pagos a cuenta: primero saldo inicial, luego facturas por fecha de emisión.
   let credit=round(activePayments(id).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
@@ -77,6 +101,7 @@ function render() {
     const owed = db.clients.reduce((s,c)=>s+Math.max(0,balance(c.id)),0);
     root.innerHTML = `${!db.clients.length?'<div class="intro"><div><h2>Bienvenido a tu ferretería</h2><p>Empezá cargando tus clientes y productos. El descuento de cada cliente se aplica solo.</p></div><button data-action="import">Importar desde Excel ↗</button></div>':''}<div class="cards"><div class="card"><small>CLIENTES</small><div class="value">${db.clients.length}</div><small>Con su descuento personalizado</small></div><div class="card"><small>PEDIDOS PENDIENTES</small><div class="value">${db.orders.filter(o=>o.status==='Pendiente').length}</div><small>Para preparar y entregar</small></div><div class="card accent"><small>TOTAL POR COBRAR</small><div class="value">${money(owed)}</div><small>Saldos de cuentas de clientes</small></div></div><div class="grid"><section class="panel"><div class="section-head"><h2>Últimos pedidos</h2><button class="link" data-action="orders">Ver todos →</button></div>${table(['Pedido','Cliente','Fecha','Total','Estado'],orderRows(db.orders.slice().reverse().slice(0,6)),'Tus pedidos van a aparecer acá.')}</section><section class="panel"><h2>Clientes con saldo pendiente</h2>${table(['Cliente','Saldo'],db.clients.filter(c=>balance(c.id)>0).sort((a,b)=>balance(b.id)-balance(a.id)).slice(0,6).map(c=>`<tr><td>${clientButton(c)}</td><td>${money(balance(c.id))}</td></tr>`).join(''),'No hay saldos pendientes.')}</section></div>`;
   }
+  if (view === 'panel') root.insertAdjacentHTML('beforeend',zoneDebtPanel());
   if (view === 'clientes') {
     root.innerHTML = `<section class="panel"><div class="toolbar"><input id="search" placeholder="Buscar nombre, teléfono, CUIT o zona…" aria-label="Buscar clientes"><button data-action="client">+ Nuevo cliente</button></div><div class="field"><label for="zone-filter">Zona</label><select id="zone-filter"><option value="">Todas las zonas</option>${[...new Set(db.clients.map(c=>c.zone||'').filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es')).map(zone=>`<option value="${esc(zone)}">${esc(zone)}</option>`).join('')}</select></div><div id="results"></div></section>`;
     const update = () => { const q = $('#search').value.toLowerCase(),zone=$('#zone-filter').value; const clients = db.clients.filter(c=>clientSearch(c).includes(q)&&(!zone||c.zone===zone)); $('#results').innerHTML = table(['Cliente','Teléfono','Descuento','Saldo',''],clients.map(c=>`<tr><td>${clientButton(c)}</td><td>${esc(c.phone || '—')}</td><td><span class="badge">${c.discount}%</span></td><td>${money(balance(c.id))}</td><td><button class="link" data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''),'No hay clientes para mostrar. Podés agregar uno o importarlo desde Excel.'); }; $('#search').oninput = update;$('#zone-filter').onchange=update; update();
@@ -105,6 +130,7 @@ function showClient(id) {
   if(c.email)$('#modal-body .actions').insertAdjacentHTML('afterend',`<p>Email: ${esc(c.email)}</p>`);
   $('#modal-body .actions').insertAdjacentHTML('afterend',`<p>${c.cuit?`CUIT: ${esc(formatCuit(c.cuit))}`:''}${c.zone?` · Zona: ${esc(c.zone)}`:''}</p>`);
   $('#modal-body').insertAdjacentHTML('beforeend',`<h3 style="margin-top:20px">Pagos y recibos</h3>${table(['Recibo / acciones','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>p.clientId===id).slice().reverse()),'Todavía no hay pagos.')}`);
+  $('#modal-body').insertAdjacentHTML('beforeend',`<h3 style="margin-top:20px">Facturas · días desde el vencimiento</h3>${table(invoiceHeaders,invoiceRows(invoiceBalances(id)),'No hay facturas registradas.')}`);
 }
 function accountStatement(id) {
   const customer=client(id);if(!customer)return null;
@@ -168,10 +194,11 @@ async function downloadStatementPdf(id,button) {
 function renderAccounts(root) {
   root.innerHTML=`<div class="notice"><strong>Control de facturas ya emitidas, no facturación.</strong> Los pedidos no suman deuda, incluidos los anteriores. Se conservan los saldos iniciales y pagos registrados. Los pagos se aplican primero al saldo inicial y luego a las facturas más antiguas por fecha de emisión.</div><section class="panel"><div class="toolbar"><input id="invoice-search" placeholder="Buscar factura o cliente…" aria-label="Buscar facturas"><button class="primary" data-action="invoice">+ Cargar factura</button><button data-action="account-payment">Registrar pago</button></div><div class="field"><label for="invoice-filter">Mostrar</label><select id="invoice-filter"><option value="all">Todas las facturas</option><option value="pending">Pendientes</option><option value="overdue">Vencidas pendientes</option><option value="paid">Pagadas</option></select></div><div id="invoice-results"></div></section><section class="panel" style="margin-top:20px"><h2>Saldos por cliente</h2><div id="account-balances"></div></section>`;
   root.insertAdjacentHTML('beforeend','<section class="panel" style="margin-top:20px"><h2>Pagos y recibos</h2><div id="receipt-history"></div></section>');
+  root.insertAdjacentHTML('afterbegin',zoneDebtPanel());
   const update=()=>{
     const q=$('#invoice-search').value.toLowerCase(),filter=$('#invoice-filter').value;
     const invoices=db.clients.flatMap(c=>invoiceBalances(c.id)).filter(i=>`${i.number} ${clientSearch(client(i.clientId))}`.toLowerCase().includes(q)).filter(i=>filter==='pending'?i.pending>0:filter==='overdue'?i.pending>0&&i.due<date():filter==='paid'?i.pending===0:true).sort((a,b)=>a.due.localeCompare(b.due));
-    $('#invoice-results').innerHTML=table(['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Estado'],invoices.map(i=>`<tr><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td><span class="badge ${i.pending>0?'pending':''}">${i.pending===0?'Pagada':i.due<date()?'Vencida':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`).join(''),'No hay facturas para mostrar. Cargá una factura ya emitida; los pedidos no se convierten en facturas.');
+    $('#invoice-results').innerHTML=table(invoiceHeaders,invoiceRows(invoices),'No hay facturas para mostrar. Cargá una factura ya emitida; los pedidos no se convierten en facturas.');
     $('#account-balances').innerHTML=table(['Cliente','Saldo inicial','Saldo actual',''],db.clients.filter(c=>clientSearch(c).includes(q)).map(c=>`<tr><td>${clientButton(c)}</td><td>${money(c.opening)}</td><td>${money(balance(c.id))}</td><td><button data-payment="${esc(c.id)}">Registrar pago</button></td></tr>`).join(''));
     $('#receipt-history').innerHTML=table(['Recibo / acciones','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>`${clientSearch(client(p.clientId))} ${p.receipt?.number||''} ${paymentDetail(p)}`.toLowerCase().includes(q)).slice().reverse()),'Todavía no hay pagos registrados.');
   };$('#invoice-search').oninput=update;$('#invoice-filter').onchange=update;update();
