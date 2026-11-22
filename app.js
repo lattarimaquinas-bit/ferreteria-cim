@@ -34,7 +34,13 @@ function toast(text) { $('#toast').textContent = text; $('#toast').hidden = fals
 function modal(title, html) { $('#modal-title').textContent = `${companyNames[companyId]} · ${title}`; $('#modal-body').innerHTML = html; if (!$('#modal').open) $('#modal').showModal(); }
 function close() { $('#modal').close(); }
 function client(id) { return db.clients.find(c => c.id === id); }
-function activePayments(id) { return db.payments.filter(p=>p.clientId===id&&!p.voidedAt); }
+function activePayments(id, excludeId, beforeId) {
+  let list=db.payments.filter(p=>p.clientId===id&&!p.voidedAt&&p.id!==excludeId);
+  // Al corregir un pago viejo hay que mirar sólo los pagos que ya existían
+  // cuando se cargó: los posteriores no pueden cambiar lo que ese pago cubrió.
+  if(beforeId){const index=db.payments.findIndex(p=>p.id===beforeId);if(index>=0)list=list.filter(p=>db.payments.indexOf(p)<index);}
+  return list;
+}
 function paymentDetail(p) {return [p.note,...(p.receipt?.tenders||[]).map(t=>`${t.method}${t.reference?` ${t.reference}`:''}${t.bank?` · ${t.bank}`:''}${t.due?` · vence ${prettyDate(t.due)}`:''}: ${money(t.amount)}`)].filter(Boolean).join(' / ');}
 function cuitDigits(value) { return String(value??'').replace(/[\s-]/g,''); }
 function validCuit(value) { return value===''||/^\d{11}$/.test(value); }
@@ -66,19 +72,21 @@ function invoiceRows(invoices,today=date()) {
   }).join('');
 }
 const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días de atraso','Estado'];
-function invoiceBalances(id) {
+function invoiceBalances(id, excludeId, beforeId) {
   // Pagos a cuenta: primero saldo inicial, luego facturas por fecha de emisión.
-  let credit=round(activePayments(id).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
+  // `excludeId` sirve al corregir un pago: hay que calcular cómo quedaban las
+  // facturas SIN ese pago, para volver a aplicarlo con el importe corregido.
+  let credit=round(activePayments(id, excludeId, beforeId).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
   credit=Math.max(0,credit);
   return db.invoices.filter(i=>i.clientId===id).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id)).map(i=>{const paid=round(Math.min(credit,i.amount));credit=round(credit-paid);return {...i,paid,pending:round(i.amount-paid)};});
 }
-function paymentApplications(id,amount) {
+function paymentApplications(id,amount,excludeId,beforeId) {
   const applications=[];let remaining=amount;
-  const payments=activePayments(id).reduce((sum,p)=>sum+p.amount,0);
+  const payments=activePayments(id,excludeId,beforeId).reduce((sum,p)=>sum+p.amount,0);
   const openingPending=round(Math.max(0,(client(id)?.opening||0)-payments));
   const openingPaid=round(Math.min(remaining,openingPending));
   if(openingPaid>0){applications.push({type:'opening',number:'Saldo inicial',amount:openingPaid});remaining=round(remaining-openingPaid);}
-  for(const invoice of invoiceBalances(id)){
+  for(const invoice of invoiceBalances(id,excludeId,beforeId)){
     const applied=round(Math.min(remaining,invoice.pending));
     if(applied>0){applications.push({type:'invoice',invoiceId:invoice.id,number:invoice.number,amount:applied,invoiceAmount:invoice.amount,pendingAfter:round(invoice.pending-applied)});remaining=round(remaining-applied);}
     if(remaining<=0)break;
@@ -89,7 +97,7 @@ function paymentApplications(id,amount) {
 function field(label, name, value = '', type = 'text', extra = '') { return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`; }
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
 function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>${c.cuit?`<br><small>CUIT ${esc(formatCuit(c.cuit))}</small>`:''}${c.zone?`<br><small>Zona: ${esc(c.zone)}</small>`:''}${c.email?`<br><small>${esc(c.email)}</small>`:''}<br><div class="actions"><button data-edit-client="${esc(c.id)}">Editar cliente</button><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button></div></div>`; }
-function paymentRows(payments) {return payments.map(p=>`<tr><td><div class="actions"><button class="primary" data-receipt="${esc(p.id)}">${p.voidedAt?'Recibo anulado':'Recibo PDF'}${p.receipt?` #${p.receipt.number}`:''}</button>${p.voidedAt?'<span class="badge pending">ANULADO · no afecta el saldo</span>':`<button style="color:#a13f2c" data-void-payment="${esc(p.id)}">Borrar pago</button>`}</div>${paymentDetail(p)?`<small>${esc(paymentDetail(p))}</small>`:''}</td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
+function paymentRows(payments) {return payments.map(p=>`<tr><td><div class="actions"><button class="primary" data-receipt="${esc(p.id)}">${p.voidedAt?'Recibo anulado':'Recibo PDF'}${p.receipt?` #${p.receipt.number}`:''}</button>${p.voidedAt?'<span class="badge pending">ANULADO · no afecta el saldo</span>':`<button data-edit-payment="${esc(p.id)}">Editar pago</button><button style="color:#a13f2c" data-void-payment="${esc(p.id)}">Borrar pago</button>`}</div>${paymentDetail(p)?`<small>${esc(paymentDetail(p))}</small>`:''}</td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
 function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button data-edit-order="${esc(o.id)}">Editar pedido</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function render() {
   const titles = {panel:'Resumen',clientes:'Clientes',productos:'Productos',pedidos:'Pedidos',cuentas:'Cuenta corriente',datos:'Importar y respaldar'};
@@ -254,6 +262,40 @@ function voidPayment(id) {
     if(owner!==companyId)return;
     const current=db.payments.find(item=>item.id===id);if(!current||current.voidedAt)return;
     if(commit(next=>{next.payments.find(item=>item.id===id).voidedAt=new Date().toISOString();})){close();view='cuentas';render();toast('Pago anulado. Saldo y facturas recalculados.');}
+  };
+}
+function editPayment(id) {
+  const p=db.payments.find(x=>x.id===id);if(!p||p.voidedAt)return;
+  const c=client(p.clientId);if(!c)return;
+  const owner=companyId;
+  const originalTenders=p.receipt?.tenders?.length?structuredClone(p.receipt.tenders):[{method:'Efectivo',amount:p.amount,reference:'',bank:'',due:''}];
+  let sequence=originalTenders.length;
+  const tenderHtml=(t,i)=>`<section class="panel payment-tender" style="margin-bottom:12px"><div class="form-grid"><div class="field"><label for="method-${i}">Medio de pago</label><select id="method-${i}" name="method">${PAYMENT_METHODS.map(m=>`<option ${m===t.method?'selected':''}>${m}</option>`).join('')}</select></div><div class="field"><label for="amount-${i}">Importe recibido ($)</label><input id="amount-${i}" name="amount" type="number" min="0.01" step="0.01" value="${esc(t.amount)}" required></div><div class="field"><label for="reference-${i}">Número de eCheq / cheque o referencia</label><input id="reference-${i}" name="reference" maxlength="150" value="${esc(t.reference||'')}"></div><div class="field"><label for="bank-${i}">Banco (opcional)</label><input id="bank-${i}" name="bank" maxlength="100" value="${esc(t.bank||'')}"></div><div class="field"><label for="due-${i}">Vencimiento del cheque (opcional)</label><input id="due-${i}" name="due" type="date" value="${esc(t.due||'')}"></div></div><button type="button" data-remove-tender>Quitar este medio</button></section>`;
+  modal(`Editar pago · ${c.name}`,`<p>Saldo actual: <strong>${money(balance(id))}</strong>${p.receipt?` · Recibo #${p.receipt.number}`:''}</p><p class="help">Se corrige el mismo pago: no se crea un recibo nuevo. Si ya entregaste el recibo anterior, descargá el corregido.</p><form id="payment-edit-form">${field('Fecha de recepción del pago','date',p.date,'date','required')}<h3>Medios de pago del recibo</h3><p class="help">Cargá cada eCheq, cheque, transferencia o efectivo por separado. Se suman en un único recibo y se descuentan una sola vez.</p><div id="payment-tenders">${originalTenders.map(tenderHtml).join('')}</div><button type="button" id="add-tender">+ Agregar otro medio de pago</button><p class="balance">Total recibido: <span id="payment-total">${money(p.amount)}</span></p>${field('Observaciones (opcional)','note',p.note,'text','placeholder="Detalle del pago…"')}<div class="form-actions"><button class="primary">Guardar cambios</button></div></form>`);
+  const total=()=>{$('#payment-total').textContent=money(round([...document.querySelectorAll('#payment-tenders [name="amount"]')].reduce((sum,input)=>sum+(Number(input.value)||0),0)));};
+  const add=()=>{
+    if(document.querySelectorAll('.payment-tender').length>=50)return toast('Podés incluir hasta 50 medios por recibo.');
+    const i=sequence++;
+    $('#payment-tenders').insertAdjacentHTML('beforeend',tenderHtml({method:'Efectivo',amount:'',reference:'',bank:'',due:''},i));
+    total();
+  };
+  $('#add-tender').onclick=add;
+  $('#payment-tenders').oninput=total;
+  $('#payment-tenders').onclick=e=>{const b=e.target.closest('[data-remove-tender]');if(!b)return;if(document.querySelectorAll('.payment-tender').length===1)return toast('El recibo necesita al menos un medio de pago.');b.closest('.payment-tender').remove();total();};
+  $('#payment-edit-form').onsubmit=e=>{
+    e.preventDefault();if(owner!==companyId)return;const f=new FormData(e.target);
+    const methods=f.getAll('method'),references=f.getAll('reference'),banks=f.getAll('bank'),dues=f.getAll('due');
+    const tenders=f.getAll('amount').map((v,i)=>({method:methods[i],amount:round(Number(v)),reference:String(references[i]||'').trim(),bank:String(banks[i]||'').trim(),due:String(dues[i]||'')}));
+    const amount=round(tenders.reduce((sum,t)=>sum+t.amount,0));
+    if(!validTenders(tenders,amount))return alert('Revisá los importes. Cada medio debe ser mayor a cero; los eCheq y cheques necesitan su número o referencia.');
+    const current=db.payments.find(x=>x.id===id);if(!current||current.voidedAt)return;
+    const record={...current,date:f.get('date'),note:String(f.get('note')||'').trim(),amount};
+    if(current.receipt){
+      record.receipt={...current.receipt,tenders,applications:paymentApplications(current.clientId,amount,current.id,current.id),balanceAfter:round(current.receipt.balanceBefore-amount),editedAt:new Date().toISOString()};
+    }
+    if(commit(n=>{const index=n.payments.findIndex(x=>x.id===id);if(index>=0)n.payments[index]=record;})){
+      close();view='cuentas';render();toast('Pago corregido. Saldos y recibo recalculados.');
+    }
   };
 }
 function newOrder(id) {
@@ -495,6 +537,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   if(b.dataset.receipt)downloadReceiptPdf(b.dataset.receipt,b);
   if(b.dataset.statement)downloadStatementPdf(b.dataset.statement,b);
+  if(b.dataset.editPayment)editPayment(b.dataset.editPayment);
   if(b.dataset.voidPayment)voidPayment(b.dataset.voidPayment);
   if(b.dataset.invoice)editInvoice(b.dataset.invoice);
   if(b.dataset.action==='invoice')editInvoice();
