@@ -96,7 +96,7 @@ function paymentApplications(id,amount,excludeId,beforeId) {
 }
 function field(label, name, value = '', type = 'text', extra = '') { return `<div class="field"><label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${esc(value)}" ${extra}></div>`; }
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
-function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>${c.cuit?`<br><small>CUIT ${esc(formatCuit(c.cuit))}</small>`:''}${c.zone?`<br><small>Zona: ${esc(c.zone)}</small>`:''}${c.email?`<br><small>${esc(c.email)}</small>`:''}<br><div class="actions"><button data-edit-client="${esc(c.id)}">Editar cliente</button><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button></div></div>`; }
+function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>${c.cuit?`<br><small>CUIT ${esc(formatCuit(c.cuit))}</small>`:''}${c.zone?`<br><small>Zona: ${esc(c.zone)}</small>`:''}${c.email?`<br><small>${esc(c.email)}</small>`:''}<br><div class="actions"><button data-edit-client="${esc(c.id)}">Editar cliente</button><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button><button data-delete-client="${esc(c.id)}">Eliminar cliente</button></div></div>`; }
 function paymentRows(payments) {return payments.map(p=>`<tr><td><div class="actions"><button class="primary" data-receipt="${esc(p.id)}">${p.voidedAt?'Recibo anulado':'Recibo PDF'}${p.receipt?` #${p.receipt.number}`:''}</button>${p.voidedAt?'<span class="badge pending">ANULADO · no afecta el saldo</span>':`<button data-edit-payment="${esc(p.id)}">Editar pago</button><button style="color:#a13f2c" data-void-payment="${esc(p.id)}">Borrar pago</button>`}</div>${paymentDetail(p)?`<small>${esc(paymentDetail(p))}</small>`:''}</td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
 function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button data-edit-order="${esc(o.id)}">Editar pedido</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function render() {
@@ -129,6 +129,35 @@ function editClient(id) {
   modal(id?'Editar cliente':'Nuevo cliente',`<form id="client-form"><div class="form-grid">${field('Nombre *','name',c.name,'text','required maxlength="150"')}${field('CUIT (opcional)','cuit',formatCuit(c.cuit),'text','inputmode="numeric" maxlength="13" placeholder="20-12345678-6"')}${field('Zona','zone',c.zone||'','text','maxlength="100" placeholder="Ej.: Norte, Centro, Ruta 8"')}${field('Teléfono','phone',c.phone,'tel')}${field('Dirección','address',c.address)}${field('Descuento personal (%)','discount',c.discount,'number','required min="0" max="100" step="0.01"')}${field('Saldo inicial ($)','opening',c.opening,'number','required step="0.01"')}${field('Recordatorio de seguimiento','followup',c.followup,'date')}</div><div class="field"><label for="notes">Notas</label><textarea id="notes" name="notes">${esc(c.notes)}</textarea></div><p class="help">CUIT: 11 dígitos, con o sin guiones. El saldo inicial es la deuda anterior a usar esta app; un valor negativo representa saldo a favor. El descuento solo afecta pedidos nuevos.</p><div class="form-actions"><button class="primary">Guardar cliente</button></div></form>`);
   $('#client-form .form-grid').insertAdjacentHTML('beforeend',field('Email (opcional)','email',c.email||'','email','maxlength="254" autocomplete="email" placeholder="cliente@ejemplo.com"'));
   $('#client-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); const record = {id:id||uid(),name:f.get('name').trim(),cuit:cuitDigits(f.get('cuit')),zone:f.get('zone').trim(),email:f.get('email').trim(),phone:f.get('phone').trim(),address:f.get('address').trim(),discount:Number(f.get('discount')),opening:round(Number(f.get('opening'))),notes:f.get('notes').trim(),followup:f.get('followup')}; if (!record.name) return;if(!validCuit(record.cuit))return alert('El CUIT debe tener 11 dígitos, o quedar vacío.');if(!validEmail(record.email))return alert('Revisá el email, por ejemplo cliente@empresa.com, o dejalo vacío.'); if(commit(n=> {const i=n.clients.findIndex(x=>x.id===id); if(i<0)n.clients.push(record);else n.clients[i]=record;})) {close();render();toast('Cliente guardado');} };
+}
+function deleteClient(id) {
+  const customer = client(id);
+  if (!customer) return;
+  const companyKey = KEY;
+  const hasHistory = data => {
+    const record = data.clients.find(item => item.id === id);
+    return record?.opening !== 0 || ['orders', 'payments', 'invoices'].some(
+      type => data[type]?.some(item => item.clientId === id)
+    );
+  };
+  const blockedMessage = 'Solo se pueden eliminar clientes sin saldo inicial, pedidos, facturas ni pagos registrados.';
+  if (hasHistory(db)) return alert(blockedMessage);
+
+  modal('Eliminar cliente', `<p>¿Querés eliminar a <strong>${esc(customer.name)}</strong> de la empresa activa?</p><div class="form-actions"><button id="cancel-delete-client">Cancelar</button><button id="confirm-delete-client" style="background:#a13f2c;color:white">Sí, eliminar cliente</button></div>`);
+  $('#cancel-delete-client').onclick = close;
+  $('#confirm-delete-client').onclick = () => {
+    if (KEY !== companyKey) return;
+    loadCompany();
+    if (!client(id)) return;
+    if (hasHistory(db)) return alert(blockedMessage);
+    if (commit(next => {
+      next.clients = next.clients.filter(item => item.id !== id);
+    })) {
+      close();
+      render();
+      toast('Cliente eliminado.');
+    }
+  };
 }
 function showClient(id) {
   const c = client(id); if(!c)return;
@@ -530,6 +559,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.view){view=b.dataset.view;render();}
   if(b.dataset.client)showClient(b.dataset.client);
   if(b.dataset.editClient)editClient(b.dataset.editClient);
+  if(b.dataset.deleteClient)deleteClient(b.dataset.deleteClient);
   if(b.dataset.product)editProduct(b.dataset.product);
   if(b.dataset.payment)payment(b.dataset.payment);
   if(b.dataset.order)showOrder(b.dataset.order);
