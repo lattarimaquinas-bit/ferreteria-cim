@@ -361,7 +361,17 @@ function newOrder(id) {
 }
 function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
-  modal(`Pedido #${o.number}`,`<p><strong>${esc(client(o.clientId)?.name)}</strong> · ${prettyDate(o.date)}</p>${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button></div>`);
+  modal(`Pedido #${o.number}`,`<p><strong>${esc(client(o.clientId)?.name)}</strong> · ${prettyDate(o.date)}</p>${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
+  const owner = companyId;
+  $('#delete-order').onclick = () => {
+    if (owner !== companyId) return;
+    if (!window.confirm(`¿Borrar el pedido #${o.number} de ${client(o.clientId)?.name || 'este cliente'}?`)) return;
+    if (commit(next => { next.orders = next.orders.filter(order => order.id !== id); })) {
+      close();
+      render();
+      toast('Pedido borrado.');
+    }
+  };
   $('#save-status').onclick=()=>{const status=$('#status').value;if(commit(n=>n.orders.find(x=>x.id===id).status=status)){close();render();toast('Estado actualizado');}};
   $('#print-order').insertAdjacentHTML('beforebegin',`<button class="primary" data-pdf="${esc(id)}">Descargar PDF</button>`);
   $('#print-order').insertAdjacentHTML('beforebegin',`<button data-edit-order="${esc(id)}">Editar pedido</button>`);
