@@ -351,8 +351,38 @@ function newOrder(id) {
   if(original){$('#modal-title').textContent=`${companyNames[companyId]} · Editar pedido #${original.number}`;$('#order-client').value=original.clientId;$('#order-date').value=original.date;$('#order-notes').value=original.notes;$('#order-form').insertAdjacentHTML('afterbegin','<p class="notice">Se conservan los precios y el descuento originales del pedido. Los productos nuevos usan el precio actual del catálogo. Si cambiás de cliente, se aplica el descuento actual del nuevo cliente. Los PDF ya enviados no se modifican: descargá una nueva copia después de guardar.</p>');}
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
-  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
+  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" enterkeyhint="next" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
   bindClientFinder($('#order-client'));
+  const search = $('#product-search');
+  search.setAttribute('enterkeyhint', 'next');
+  search.onkeydown = event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    const code = search.value.trim().toLowerCase();
+    const matches = db.products.filter(p => String(p.code).trim().toLowerCase() === code);
+    if (!code || matches.length !== 1) {
+      alert('Ingresá el código exacto o elegí el artículo de la lista.');
+      return;
+    }
+    const product = matches[0];
+    lines.push({productId:product.id, code:product.code, name:product.name, price:product.price, qty:1});
+    draw();
+    const quantity = $('#order-lines').querySelector('[data-qty="' + (lines.length - 1) + '"]');
+    quantity.focus();
+    quantity.select();
+  };
+  $('#order-lines').onkeydown = event => {
+    const quantity = event.target;
+    if (event.key !== 'Enter' || quantity.dataset.qty === undefined) return;
+    event.preventDefault();
+    if (event.repeat || !quantity.reportValidity()) return;
+    lines[Number(quantity.dataset.qty)].qty = quantity.valueAsNumber;
+    summary();
+    search.value = '';
+    options();
+    search.focus();
+  };
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
   $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';draw();};
   $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
