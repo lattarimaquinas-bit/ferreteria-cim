@@ -345,12 +345,39 @@ function newOrder(id) {
   if(!db.clients.length||(!original&&!db.products.length)){toast('Primero cargá al menos un cliente y un producto.');return;}
   const owner=companyId;
   let lines=original?structuredClone(original.lines):[];
-  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><select id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button class="primary">Guardar pedido</button></div></form>`);
+  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button class="primary">Guardar pedido</button></div></form>`);
   const options=()=>{const q=$('#product-search').value.toLowerCase();$('#add-product').innerHTML='<option value="">+ Elegir producto para agregar…</option>'+db.products.filter(p=>`${p.code} ${p.name}`.toLowerCase().includes(q)).map(p=>`<option value="${esc(p.id)}">${esc(p.code)} · ${esc(p.name)} · ${money(p.price)}</option>`).join('');};
   if(original){$('#modal-title').textContent=`${companyNames[companyId]} · Editar pedido #${original.number}`;$('#order-client').value=original.clientId;$('#order-date').value=original.date;$('#order-notes').value=original.notes;$('#order-form').insertAdjacentHTML('afterbegin','<p class="notice">Se conservan los precios y el descuento originales del pedido. Los productos nuevos usan el precio actual del catálogo. Si cambiás de cliente, se aplica el descuento actual del nuevo cliente. Los PDF ya enviados no se modifican: descargá una nueva copia después de guardar.</p>');}
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
   const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
+  const finder = $('#client-finder'), query = $('#client-query'), matches = $('#client-matches');
+  const toggleFinder = open => {
+    finder.hidden = !open;
+    $('#find-client').setAttribute('aria-expanded', String(open));
+    if (open) { query.value = ''; matches.replaceChildren(); query.focus(); }
+  };
+  $('#find-client').onclick = () => toggleFinder(finder.hidden);
+  query.oninput = () => {
+    const term = normalize(query.value);
+    matches.replaceChildren();
+    if (!term) return;
+    for (const customer of db.clients.filter(c => normalize(c.name).includes(term))) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.style.display = 'block';
+      button.textContent = customer.name;
+      button.onclick = () => {
+        $('#order-client').value = customer.id;
+        summary();
+        toggleFinder(false);
+        $('#find-client').focus();
+      };
+      matches.append(button);
+    }
+    if (!matches.childElementCount) matches.textContent = 'Sin coincidencias';
+  };
+  query.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); matches.querySelector('button')?.focus(); } };
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
   $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';draw();};
   $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
