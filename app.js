@@ -346,8 +346,24 @@ function newOrder(id) {
   if(!db.clients.length||(!original&&!db.products.length)){toast('Primero cargá al menos un cliente y un producto.');return;}
   const owner=companyId;
   let lines=original?structuredClone(original.lines):[];
-  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button class="primary">Guardar pedido</button></div></form>`);
-  const options=()=>{const q=$('#product-search').value.toLowerCase();$('#add-product').innerHTML='<option value="">+ Elegir producto para agregar…</option>'+db.products.filter(p=>`${p.code} ${p.name}`.toLowerCase().includes(q)).map(p=>`<option value="${esc(p.id)}">${esc(p.code)} · ${esc(p.name)} · ${money(p.price)}</option>`).join('');};
+  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><button type="button" id="exact-product" hidden></button><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button class="primary">Guardar pedido</button></div></form>`);
+  const preview = $('#exact-product');
+  function exactProduct(code) {
+    if (!code) return;
+    const matches = db.products.filter(product => String(product.code).trim().toLowerCase() === code);
+    if (matches.length === 1) return matches[0];
+  }
+  function focusQuantity(index) {
+    draw();
+    const quantity = $('#order-lines').querySelector('[data-qty="' + index + '"]');
+    quantity.focus();
+    quantity.select();
+  }
+  const options=()=>{const q=$('#product-search').value.trim().toLowerCase();$('#add-product').innerHTML='<option value="">+ Elegir producto para agregar…</option>'+db.products.filter(p=>`${p.code} ${p.name}`.toLowerCase().includes(q)).map(p=>`<option value="${esc(p.id)}">${esc(p.code)} · ${esc(p.name)} · ${money(p.price)}</option>`).join('');
+    const match = exactProduct(q);
+    preview.hidden = !match;
+    preview.textContent = match ? `${match.code} · ${match.name} · ${money(match.price)}` : '';
+  };
   if(original){$('#modal-title').textContent=`${companyNames[companyId]} · Editar pedido #${original.number}`;$('#order-client').value=original.clientId;$('#order-date').value=original.date;$('#order-notes').value=original.notes;$('#order-form').insertAdjacentHTML('afterbegin','<p class="notice">Se conservan los precios y el descuento originales del pedido. Los productos nuevos usan el precio actual del catálogo. Si cambiás de cliente, se aplica el descuento actual del nuevo cliente. Los PDF ya enviados no se modifican: descargá una nueva copia después de guardar.</p>');}
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
@@ -355,23 +371,22 @@ function newOrder(id) {
   bindClientFinder($('#order-client'));
   const search = $('#product-search');
   search.setAttribute('enterkeyhint', 'next');
+  preview.onclick = () => addExactProduct();
   search.onkeydown = event => {
     if (event.key !== 'Enter' || event.isComposing) return;
     event.preventDefault();
-    if (event.repeat) return;
+    if (!event.repeat) addExactProduct();
+  };
+  function addExactProduct() {
     const code = search.value.trim().toLowerCase();
-    const matches = db.products.filter(p => String(p.code).trim().toLowerCase() === code);
-    if (!code || matches.length !== 1) {
+    const product = exactProduct(code);
+    if (!product) {
       alert('Ingresá el código exacto o elegí el artículo de la lista.');
       return;
     }
-    const product = matches[0];
     lines.push({productId:product.id, code:product.code, name:product.name, price:product.price, qty:1});
-    draw();
-    const quantity = $('#order-lines').querySelector('[data-qty="' + (lines.length - 1) + '"]');
-    quantity.focus();
-    quantity.select();
-  };
+    focusQuantity(lines.length - 1);
+  }
   $('#order-lines').onkeydown = event => {
     const quantity = event.target;
     if (event.key !== 'Enter' || quantity.dataset.qty === undefined) return;
@@ -384,7 +399,7 @@ function newOrder(id) {
     search.focus();
   };
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
-  $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';draw();};
+  $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';focusQuantity(existing ? lines.indexOf(existing) : lines.length - 1);};
   $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
   $('#order-lines').onclick=e=>{const b=e.target.closest('[data-remove]');if(b){lines.splice(Number(b.dataset.remove),1);draw();}};
   $('#order-form').onsubmit=e=>{e.preventDefault();if(owner!==companyId)return;if(original&&!db.orders.some(o=>o.id===original.id))return;if(!client($('#order-client').value))return alert('Seleccioná un cliente.');if(!lines.length)return alert('Agregá al menos un producto.');if(lines.some(l=>!Number.isFinite(l.qty)||l.qty<=0))return alert('Revisá las cantidades.');const t=totals();if(![t.subtotal,t.discountAmount,t.total].every(Number.isFinite))return alert('El importe es demasiado grande.');const record={...(original||{}),id:original?.id||uid(),number:original?.number||Math.max(0,...db.orders.map(o=>o.number))+1,clientId:$('#order-client').value,date:$('#order-date').value,lines:structuredClone(lines),...t,status:original?.status||'Pendiente',notes:$('#order-notes').value.trim()};if(commit(n=>{if(original)n.orders[n.orders.findIndex(o=>o.id===original.id)]=record;else n.orders.push(record);})){close();view='pedidos';render();toast(original?'Pedido actualizado. No afecta la cuenta corriente.':'Pedido guardado. No afecta la cuenta corriente.');}};
