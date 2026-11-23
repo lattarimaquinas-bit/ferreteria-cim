@@ -256,7 +256,8 @@ function renderAccounts(root) {
 function editInvoice(id) {
   if(!db.clients.length)return toast('Primero cargá un cliente.');
   const invoice=db.invoices.find(i=>i.id===id)||{clientId:'',number:'',date:date(),due:date(),amount:'',notes:''};
-  modal(id?'Editar control de factura':'Cargar factura ya emitida',`<form id="invoice-form"><p class="help">Solo registra una factura existente. No emite comprobantes fiscales ni convierte pedidos en facturas.</p><div class="field"><label for="invoice-client">Cliente</label><select id="invoice-client" required><option value="">Seleccionar…</option>${db.clients.map(c=>`<option value="${esc(c.id)}" ${c.id===invoice.clientId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div class="form-grid">${field('Número de factura','invoice-number',invoice.number,'text','required maxlength="80"')}${field('Importe total ($)','invoice-amount',invoice.amount,'number','required min="0.01" step="0.01"')}${field('Fecha de emisión','invoice-date',invoice.date,'date','required')}${field('Vencimiento','invoice-due',invoice.due,'date','required')}</div>${field('Notas','invoice-notes',invoice.notes)}<div class="form-actions"><button class="primary">Guardar factura</button></div></form>`);
+  modal(id?'Editar control de factura':'Cargar factura ya emitida',`<form id="invoice-form"><p class="help">Solo registra una factura existente. No emite comprobantes fiscales ni convierte pedidos en facturas.</p><div class="field"><label for="invoice-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="invoice-client" required><option value="">Seleccionar…</option>${db.clients.map(c=>`<option value="${esc(c.id)}" ${c.id===invoice.clientId?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div><div class="form-grid">${field('Número de factura','invoice-number',invoice.number,'text','required maxlength="80"')}${field('Importe total ($)','invoice-amount',invoice.amount,'number','required min="0.01" step="0.01"')}${field('Fecha de emisión','invoice-date',invoice.date,'date','required')}${field('Vencimiento','invoice-due',invoice.due,'date','required')}</div>${field('Notas','invoice-notes',invoice.notes)}<div class="form-actions"><button class="primary">Guardar factura</button></div></form>`);
+  bindClientFinder($('#invoice-client'));
   $('#invoice-form').onsubmit=e=>{e.preventDefault();const record={id:id||uid(),clientId:$('#invoice-client').value,number:$('#invoice-number').value.trim(),amount:round(Number($('#invoice-amount').value)),date:$('#invoice-date').value,due:$('#invoice-due').value,notes:$('#invoice-notes').value.trim()};if(!record.number||!client(record.clientId)||!Number.isFinite(record.amount)||record.amount<=0)return alert('Revisá el cliente, el número y el importe.');if(record.due<record.date)return alert('El vencimiento no puede ser anterior a la emisión.');if(db.invoices.some(i=>i.id!==id&&i.clientId===record.clientId&&i.number.toLowerCase()===record.number.toLowerCase()))return alert('Ese cliente ya tiene cargado ese número de factura.');if(commit(n=>{const index=n.invoices.findIndex(i=>i.id===id);if(index<0)n.invoices.push(record);else n.invoices[index]=record;})){close();view='cuentas';render();toast('Factura registrada para control de cobro');}};
 }
 function chooseAccountPayment() {
@@ -351,33 +352,7 @@ function newOrder(id) {
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
   const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
-  const finder = $('#client-finder'), query = $('#client-query'), matches = $('#client-matches');
-  const toggleFinder = open => {
-    finder.hidden = !open;
-    $('#find-client').setAttribute('aria-expanded', String(open));
-    if (open) { query.value = ''; matches.replaceChildren(); query.focus(); }
-  };
-  $('#find-client').onclick = () => toggleFinder(finder.hidden);
-  query.oninput = () => {
-    const term = normalize(query.value);
-    matches.replaceChildren();
-    if (!term) return;
-    for (const customer of db.clients.filter(c => normalize(c.name).includes(term))) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.style.display = 'block';
-      button.textContent = customer.name;
-      button.onclick = () => {
-        $('#order-client').value = customer.id;
-        summary();
-        toggleFinder(false);
-        $('#find-client').focus();
-      };
-      matches.append(button);
-    }
-    if (!matches.childElementCount) matches.textContent = 'Sin coincidencias';
-  };
-  query.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); matches.querySelector('button')?.focus(); } };
+  bindClientFinder($('#order-client'));
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
   $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';draw();};
   $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
@@ -619,3 +594,34 @@ $('#rename-company').onclick=()=>{modal('Nombre de la empresa',`<form id="compan
 $('#new-order').onclick=()=>newOrder();$('#close-modal').onclick=close;
 $('#today').textContent=new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 render();
+
+function bindClientFinder(select) {
+  const finder = $('#client-finder'), query = $('#client-query'), matches = $('#client-matches');
+  const toggleFinder = open => {
+    finder.hidden = !open;
+    $('#find-client').setAttribute('aria-expanded', String(open));
+    if (open) { query.value = ''; matches.replaceChildren(); query.focus(); }
+  };
+  $('#find-client').onclick = () => toggleFinder(finder.hidden);
+  query.oninput = () => {
+    const term = normalize(query.value);
+    matches.replaceChildren();
+    if (!term) return;
+    for (const customer of db.clients.filter(c => normalize(c.name).includes(term))) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.style.display = 'block';
+      button.textContent = customer.name;
+      button.onclick = () => {
+        select.value = customer.id;
+        select.dispatchEvent(new Event('change'));
+        toggleFinder(false);
+        $('#find-client').focus();
+      };
+      matches.append(button);
+    }
+    if (!matches.childElementCount) matches.textContent = 'Sin coincidencias';
+  };
+  query.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); matches.querySelector('button')?.focus(); } };
+}
+
