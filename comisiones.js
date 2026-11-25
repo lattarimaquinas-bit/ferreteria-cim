@@ -19,10 +19,13 @@ function renderCommissions(root) {
   const fees = sales.reduce((sum,s) => sum+commissionAmount(s),0);
   const pending = sales.filter(s => s.method === 'Cheque' && !s.collected);
   const cards = [['Ventas',total],['Comisiones',fees],['Te queda',total-fees],['Cheques sin cobrar',pending.reduce((sum,s)=>sum+s.amount,0)]];
-  const rows = sales.slice().reverse().map(s => `<tr><td>${prettyDate(s.date)}<br>${esc(s.customer)}</td><td>${esc(s.description)}<br>${esc(s.notes)}</td><td>${money(s.amount)}</td><td>${money(commissionAmount(s))}<br>${esc(s.beneficiary)}</td><td>${esc(s.method)} ${esc(s.reference)} ${esc(s.bank)} ${s.due ? prettyDate(s.due) : ''} ${s.method==='Cheque' ? (s.collected?'Cobrado':`<button data-settle="${esc(s.id)}">Marcar cobrado</button>`) : ''}</td></tr>`).join('');
+  const rows = sales.slice().reverse().map(s => `<tr><td><button type="button" data-sale-edit="${esc(s.id)}">Editar</button></td><td>${prettyDate(s.date)}<br>${esc(s.customer)}</td><td>${esc(s.description)}<br>${esc(s.notes)}</td><td>${money(s.amount)}</td><td>${money(commissionAmount(s))}<br>${esc(s.beneficiary)}</td><td>${esc(s.method)} ${esc(s.reference)} ${esc(s.bank)} ${s.due ? prettyDate(s.due) : ''} ${s.method==='Cheque' ? (s.collected?'Cobrado':`<button data-settle="${esc(s.id)}">Marcar cobrado</button>`) : ''}</td></tr>`).join('');
   const receipts = db.payments.filter(p=>!p.voidedAt).flatMap(p=>(p.receipt?.tenders||[]).filter(t=>['Cheque','eCheq'].includes(t.method)).map(t=>`<tr><td>${esc(p.receipt.clientName)}</td><td>${esc(t.reference)} · ${esc(t.bank)}</td><td>${t.due?prettyDate(t.due):''}</td><td>${money(t.amount)}</td></tr>`)).join('');
-  root.innerHTML = `<div class="cards">${cards.map(([label,n])=>`<div class="card"><small>${label}</small><div class="value">${money(n)}</div></div>`).join('')}</div><section class="panel"><div class="toolbar"><h2>Ventas y comisiones</h2><button class="primary" id="add-sale">Nueva venta</button></div>${table(['Fecha y cliente','Concepto','Venta','Comisión','Cobro'],rows)}</section><section class="panel"><h2>Cheques de recibos de cuenta corriente</h2>${table(['Cliente','Cheque y banco','Vencimiento','Importe'],receipts)}</section>`;
-  $('#add-sale').onclick = newCommissionSale;
+  root.innerHTML = `<div class="cards">${cards.map(([label,n])=>`<div class="card"><small>${label}</small><div class="value">${money(n)}</div></div>`).join('')}</div><section class="panel"><div class="toolbar"><h2>Ventas y comisiones</h2><button class="primary" id="add-sale">Nueva venta</button></div>${table(['','Fecha y cliente','Concepto','Venta','Comisión','Cobro'],rows)}</section><section class="panel"><h2>Cheques de recibos de cuenta corriente</h2>${table(['Cliente','Cheque y banco','Vencimiento','Importe'],receipts)}</section>`;
+  $('#add-sale').onclick = () => commissionSaleForm();
+  root.querySelectorAll('[data-sale-edit]').forEach(button => {
+    button.onclick = () => commissionSaleForm(sales.find(s => s.id === button.dataset.saleEdit));
+  });
   root.querySelectorAll('[data-settle]').forEach(b=>b.onclick=()=>{
     if(commit(next=>{next.commissionSales.find(s=>s.id===b.dataset.settle).collected=true;})) render();
   });
@@ -35,9 +38,17 @@ function saleNumber(value, percent = false) {
   return NaN;
 }
 
-function newCommissionSale() {
+function commissionSaleForm(original) {
   const select = (id,label,choices) => `<label class="field">${label}<select id="${id}">${choices.map(v=>`<option>${v}</option>`).join('')}</select></label>`;
-  modal('Nueva venta',`<form id="sale-form" novalidate><div class="form-grid">${field('A quién le vendiste','customer','','text','required')}${field('Qué vendiste','description','','text','required')}${field('Fecha','sale-date',date(),'date','required')}${field('Importe de la venta','amount','','text','inputmode="decimal" placeholder="1.234,56" required')}${select('kind','Comisión',['Sin comisión','Porcentaje','Monto fijo'])}${field('Porcentaje o monto','rate','','text','inputmode="decimal"')}${field('Le queda a','beneficiary')}${select('method','Cómo lo cobraste',['Efectivo','Transferencia','Cheque'])}</div><div id="sale-cheque">${field('Número de cheque','reference')}${field('Banco','bank')}${field('Vencimiento','due','','date')}</div>${field('Notas','notes')}<p id="sale-preview" aria-live="polite"></p><p id="sale-error" role="alert" hidden></p><button type="submit" class="primary">Guardar venta</button></form>`);
+  modal(original ? 'Editar venta' : 'Nueva venta',`<form id="sale-form" novalidate><div class="form-grid">${field('A quién le vendiste','customer','','text','required')}${field('Qué vendiste','description','','text','required')}${field('Fecha','sale-date',date(),'date','required')}${field('Importe de la venta','amount','','text','inputmode="decimal" placeholder="1.234,56" required')}${select('kind','Comisión',['Sin comisión','Porcentaje','Monto fijo'])}${field('Porcentaje o monto','rate','','text','inputmode="decimal"')}${field('Le queda a','beneficiary')}${select('method','Cómo lo cobraste',['Efectivo','Transferencia','Cheque'])}</div><div id="sale-cheque">${field('Número de cheque','reference')}${field('Banco','bank')}${field('Vencimiento','due','','date')}</div>${field('Notas','notes')}<p id="sale-preview" aria-live="polite"></p><p id="sale-error" role="alert" hidden></p><button type="submit" class="primary">${original ? 'Guardar cambios' : 'Guardar venta'}</button></form>`);
+  if (original) {
+    for (const key of ['customer','description','kind','beneficiary','method','reference','bank','due','notes']) {
+      $('#'+key).value = original[key];
+    }
+    $('#sale-date').value = original.date;
+    $('#amount').value = String(original.amount).replace('.',',');
+    $('#rate').value = String(original.rate).replace('.',',');
+  }
   const val=id=>$('#'+id).value.trim();
   const read=()=>({customer:val('customer'),description:val('description'),date:val('sale-date'),amount:saleNumber(val('amount')),kind:val('kind'),rate:val('kind')==='Sin comisión'?0:saleNumber(val('rate'), val('kind')==='Porcentaje'),beneficiary:val('beneficiary'),method:val('method'),reference:val('method')==='Cheque'?val('reference'):'',bank:val('method')==='Cheque'?val('bank'):'',due:val('method')==='Cheque'?val('due'):'',notes:val('notes'),collected:val('method')!=='Cheque'});
   const refresh=()=>{
@@ -55,7 +66,8 @@ function newCommissionSale() {
   $('#sale-form').onchange=refresh;
   $('#sale-form').onsubmit=e=>{
     e.preventDefault();
-    const sale={id:uid(),...read()};
+    const sale={...original,id:original?.id || uid(),...read()};
+    if (sale.method==='Cheque' && original?.method==='Cheque') sale.collected=original.collected;
     function showError(id,message) {
       const error=$('#sale-error');
       $('#'+id).focus();
@@ -72,6 +84,14 @@ function newCommissionSale() {
     if (sale.method==='Cheque' && !sale.reference) return showError('reference','Ingresá el número del cheque.');
     if (sale.method==='Cheque' && !sale.due) return showError('due','Elegí el vencimiento del cheque.');
     if (!validSale(sale)) return showError('amount','Revisá los datos de la venta.');
-    if(commit(next=>(next.commissionSales??=[]).push(sale))){close();render();toast('Venta guardada.');}
+    if (commit(next => {
+      const sales = next.commissionSales ??= [];
+      if (original) Object.assign(sales.find(s => s.id === original.id), sale);
+      else sales.push(sale);
+    })) {
+      close();
+      render();
+      toast(original ? 'Cambios guardados.' : 'Venta guardada.');
+    }
   };
 }
