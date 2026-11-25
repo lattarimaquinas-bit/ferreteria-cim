@@ -110,7 +110,7 @@ function followupPanel(today = date()) {
   return `<section class="panel"><h2>Seguimiento de clientes</h2>${table(['Cliente', 'Fecha', 'Estado', ''], rows, 'No hay seguimientos para hoy ni vencidos.')}</section>`;
 }
 function render() {
-  const titles = {panel:'Resumen',clientes:'Clientes',productos:'Productos',pedidos:'Pedidos',cuentas:'Cuenta corriente',datos:'Importar y respaldar'};
+  const titles = {comisiones:'Cheques y Comisiones',panel:'Resumen',clientes:'Clientes',productos:'Productos',pedidos:'Pedidos',cuentas:'Cuenta corriente',datos:'Importar y respaldar'};
   $('#title').textContent = titles[view];
   $('#today').textContent = `${companyNames[companyId]} · ${new Date().toLocaleDateString('es-AR',{day:'numeric',month:'long',year:'numeric'})}`;
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
@@ -133,6 +133,7 @@ function render() {
   }
   if (view === 'pedidos') root.innerHTML = `<section class="panel"><h2>Todos los pedidos</h2>${table(['Pedido','Cliente','Fecha','Total','Estado'],orderRows(db.orders.slice().reverse()))}</section>`;
   if (view === 'cuentas') renderAccounts(root);
+  if (view === 'comisiones') renderCommissions(root);
   if (view === 'datos') renderData(root);
   const omitted=window.INITIAL_CATALOGS?.[companyId]?.omitted;
   if(view==='productos' && omitted?.length)root.insertAdjacentHTML('afterbegin',`<details class="notice"><summary>${omitted.length} producto(s) de la lista original sin precio, no cargados</summary><ul>${omitted.map(p=>`<li>${esc(p.code)} · ${esc(p.name)}</li>`).join('')}</ul></details>`);
@@ -605,6 +606,7 @@ function validTenders(tenders,amount) {
 function validateBackup(data) {
   const fail=()=>{throw Error('Estructura de datos incorrecta.');};const finite=n=>typeof n==='number'&&Number.isFinite(n);const text=v=>typeof v==='string';const validDate=d=>text(d)&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&!Number.isNaN(new Date(d+'T12:00:00').getTime());
   if(!data||!['clients','products','orders','payments'].every(k=>Array.isArray(data[k])))fail();
+  if(data.commissionSales!==undefined && (!Array.isArray(data.commissionSales) || !data.commissionSales.every(validSale) || new Set(data.commissionSales.map(s=>s.id)).size!==data.commissionSales.length)) fail();
   if(data.invoices!==undefined&&!Array.isArray(data.invoices))fail();
   for(const key of ['clients','products','orders','payments','invoices']){const ids=new Set();for(const item of data[key]||[]){if(!item||!text(item.id)||!item.id||ids.has(item.id))fail();ids.add(item.id);}}
   for(const c of data.clients)if(!text(c.name)||!c.name.trim()||!['phone','address','notes','followup'].every(k=>text(c[k]))||!finite(c.discount)||c.discount<0||c.discount>100||!finite(c.opening))fail();
