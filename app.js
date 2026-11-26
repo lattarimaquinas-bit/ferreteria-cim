@@ -657,8 +657,14 @@ function drawPdfCompanyLogo(doc, logo) {
   doc.addImage(logo, 'PNG', 14, 12, logoWidth, logoHeight, 'company-logo');
   return 12 + logoHeight + 8;
 }
-function buildOrderPdf(order, customer, company, JsPDF, logo) {
+function buildOrderPdf(order, customer, company, JsPDF, logo, compact = false) {
   const doc=new JsPDF({unit:'mm',format:'a4'});
+  const rowLineHeight = compact ? 4 : 4.5;
+  const rowGap = compact ? 2.5 : 6;
+  const rowBottom = compact ? 265 - rowGap : 265;
+  const rowStartSpace = compact ? rowLineHeight : 6;
+  const totalsBottom = 270;
+  const totalsHeight = compact ? 16 : 34;
   const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
   const cash=n=>text(money(n));let y=18;
   doc.setProperties({title:`${company} - Pedido ${order.number}`,subject:'Pedido comercial, no válido como factura',author:company});
@@ -687,21 +693,28 @@ function buildOrderPdf(order, customer, company, JsPDF, logo) {
   for(const line of order.lines){
     const description=doc.splitTextToSize(text(`${line.code} - ${line.name}`),78);let index=0;
     while(index<description.length){
-      if(y+6>265)page();const available=Math.max(1,Math.floor((265-y)/4.5));const part=description.slice(index,index+available);
+      if (y + rowStartSpace > rowBottom) page();
+      const available = Math.max(1, Math.floor((rowBottom - y) / rowLineHeight));
+      const part = description.slice(index, index + available);
       doc.text(part,14,y);
       if(index===0){doc.setFontSize(8);doc.text(String(line.qty),105,y,{align:'right'});doc.text(cash(line.price),148,y,{align:'right'});doc.text(cash(round(line.price*line.qty)),196,y,{align:'right'});doc.setFontSize(9);}
-      y+=part.length*4.5;index+=part.length;if(index<description.length)page();
+      y+=part.length*rowLineHeight;index+=part.length;if(index<description.length)page();
     }
-    doc.setDrawColor(225,230,222);doc.line(14,y,196,y);y+=6;
+    doc.setDrawColor(225,230,222);doc.line(14,y,196,y);y+=rowGap;
   }
-  if(y+34>270)page();
+  if (compact) y += 3;
+  if (y + totalsHeight > totalsBottom) page();
   doc.setFontSize(10);doc.text('Subtotal de lista',110,y);doc.text(cash(order.subtotal),196,y,{align:'right'});y+=7;
   doc.text(`Descuento (${order.discount}%)`,110,y);doc.text(`- ${cash(order.discountAmount)}`,196,y,{align:'right'});y+=9;
   doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text('TOTAL',110,y);doc.text(cash(order.total),196,y,{align:'right'});y+=12;
   doc.setFont('helvetica','normal');doc.setFontSize(9);
   const notes=doc.splitTextToSize(text(order.notes?`Notas: ${order.notes}`:''),180);
-  for(const note of notes){if(y+5>270)page();doc.text(note,14,y);y+=5;}
+  for(const note of notes){if(y+5>totalsBottom)page();doc.text(note,14,y);y+=5;}
   const pages=doc.getNumberOfPages();
+  if (!compact && pages > 1) {
+    const compactDoc = buildOrderPdf(order, customer, company, JsPDF, logo, true);
+    if (compactDoc.getNumberOfPages() === 1) return compactDoc;
+  }
   for(let i=1;i<=pages;i++){doc.setPage(i);doc.setTextColor(110);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.text('Importes en pesos argentinos. Pedido no válido como factura ni recibo de pago.',14,282);doc.text(`${i} / ${pages}`,196,288,{align:'right'});}
   return doc;
 }

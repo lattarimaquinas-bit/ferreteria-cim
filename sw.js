@@ -1,6 +1,6 @@
 'use strict';
 // Cambiar VERSION al publicar nuevas versiones de los archivos de la app.
-const VERSION='2026-11-26-ficha-cliente-v37';
+const VERSION='2026-11-26-pedido-pdf-v38';
 const PREFIX=`ferreteria-offline-${encodeURIComponent(self.registration.scope)}-`;
 const CACHE=PREFIX+VERSION;
 const FILES=['index.html','styles.css','app.js','comisiones.js','catalogos.js','offline.js','xlsx.full.min.js','jspdf.umd.min.js','manifest.webmanifest','icon.svg','icon-192.png','icon-512.png','apple-touch-icon.png','logos/bonfigli-oscuro.png','logos/dimafer-oscuro.png'];
