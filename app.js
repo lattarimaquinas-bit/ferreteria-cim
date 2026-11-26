@@ -419,40 +419,48 @@ function newOrder(id) {
     return quantity.reportValidity();
   }
   function confirmQuantity(quantity) {
-    if (!validQuantity(quantity)) return;
+    if (!validQuantity(quantity)) return false;
     lines[Number(quantity.dataset.qty)].qty = quantityValue(quantity);
     summary();
     search.value = '';
     options();
     if (isAndroid) {
       search.setAttribute('inputmode', 'none');
-      quantity.blur();
     }
     search.focus();
+    return true;
   }
   if (isAndroid) {
     const quickForm = $('#quick-order-entry');
     const orderForm = $('#order-form');
     const notes = $('#order-notes');
+    const customer = $('#order-client');
     let manualFocus = false;
-    orderForm.addEventListener('pointerdown', () => { manualFocus = true; });
+    let activeEntry;
+    orderForm.addEventListener('pointerdown', () => { manualFocus = true; }, true);
     orderForm.addEventListener('keydown', event => {
       if (event.key === 'Tab') manualFocus = true;
     });
-    $('#order-lines').addEventListener('focusin', event => {
-      if (event.target.dataset.qty !== undefined) manualFocus = false;
-    });
-    // Android's IME can move focus directly without dispatching Enter.
-    notes.addEventListener('focus', event => {
-      const quantity = event.relatedTarget;
-      if (manualFocus || quantity?.dataset.qty === undefined) return;
-      notes.blur();
-      confirmQuantity(quantity);
-    });
-    let activeEntry;
-    search.addEventListener('focus', () => { activeEntry = search; });
-    $('#order-lines').addEventListener('focusin', event => {
-      if (event.target.dataset.qty !== undefined) activeEntry = event.target;
+    orderForm.addEventListener('focusin', event => {
+      const target = event.target;
+      if (target === search || target.dataset.qty !== undefined) {
+        activeEntry = target;
+        manualFocus = false;
+        return;
+      }
+      // Android can advance focus without an Enter event or a relatedTarget.
+      if (!manualFocus && activeEntry?.dataset.qty !== undefined &&
+          (target === notes || target === customer)) {
+        const quantity = activeEntry;
+        requestAnimationFrame(() => {
+          const focused = document.activeElement;
+          if (manualFocus || activeEntry !== quantity || !quantity.isConnected ||
+              (focused !== notes && focused !== customer)) return;
+          if (!confirmQuantity(quantity)) quantity.focus();
+        });
+        return;
+      }
+      activeEntry = undefined;
     });
     quickForm.addEventListener('submit', event => {
       event.preventDefault();
