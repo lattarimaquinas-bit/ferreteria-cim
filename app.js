@@ -372,6 +372,12 @@ function newOrder(id) {
   bindClientFinder($('#order-client'));
   const search = $('#product-search');
   search.setAttribute('enterkeyhint', 'next');
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (isAndroid) {
+    // Re-enable the on-screen keyboard when the user taps the code field.
+    search.addEventListener('pointerdown', () => search.removeAttribute('inputmode'));
+    search.addEventListener('blur', () => search.removeAttribute('inputmode'));
+  }
   preview.onclick = () => addExactProduct();
   search.onkeydown = event => {
     if (event.key !== 'Enter' || event.isComposing) return;
@@ -397,6 +403,10 @@ function newOrder(id) {
     summary();
     search.value = '';
     options();
+    if (isAndroid) {
+      search.setAttribute('inputmode', 'none');
+      quantity.blur();
+    }
     search.focus();
   };
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
