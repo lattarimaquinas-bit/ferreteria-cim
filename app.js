@@ -347,7 +347,12 @@ function newOrder(id) {
   if(!db.clients.length||(!original&&!db.products.length)){toast('Primero cargá al menos un cliente y un producto.');return;}
   const owner=companyId;
   let lines=original?structuredClone(original.lines):[];
-  const isAndroid = /Android/i.test(navigator.userAgent);
+  // Android tablets can identify as Linux when Chrome requests the desktop site.
+  const platform = navigator.userAgentData?.platform || '';
+  const isAndroid = /Android/i.test(navigator.userAgent) ||
+    platform === 'Android' ||
+    (/Linux/i.test(platform || navigator.userAgent) && navigator.maxTouchPoints > 0 &&
+      window.matchMedia('(any-pointer: coarse)').matches);
   const quickFormAttribute = isAndroid ? 'form="quick-order-entry"' : '';
   modal('Nuevo pedido',`${isAndroid ? '<form id="quick-order-entry" hidden><button type="submit" formnovalidate></button></form>' : ''}<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" ${quickFormAttribute} placeholder="Código o descripción…"><button type="button" id="exact-product" hidden></button><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button id="save-order" class="primary">Guardar pedido</button></div></form>`);
   const preview = $('#exact-product');
