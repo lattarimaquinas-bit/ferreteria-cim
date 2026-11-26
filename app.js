@@ -368,11 +368,11 @@ function newOrder(id) {
   if(original){$('#modal-title').textContent=`${companyNames[companyId]} · Editar pedido #${original.number}`;$('#order-client').value=original.clientId;$('#order-date').value=original.date;$('#order-notes').value=original.notes;$('#order-form').insertAdjacentHTML('afterbegin','<p class="notice">Se conservan los precios y el descuento originales del pedido. Los productos nuevos usan el precio actual del catálogo. Si cambiás de cliente, se aplica el descuento actual del nuevo cliente. Los PDF ya enviados no se modifican: descargá una nueva copia después de guardar.</p>');}
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
-  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" enterkeyhint="next" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" enterkeyhint="${isAndroid ? 'done' : 'next'}" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
   bindClientFinder($('#order-client'));
   const search = $('#product-search');
-  search.setAttribute('enterkeyhint', 'next');
-  const isAndroid = /Android/i.test(navigator.userAgent);
+  search.setAttribute('enterkeyhint', isAndroid ? 'go' : 'next');
   if (isAndroid) {
     // Re-enable the on-screen keyboard when the user taps the code field.
     search.addEventListener('pointerdown', () => search.removeAttribute('inputmode'));
