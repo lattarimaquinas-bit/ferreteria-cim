@@ -105,7 +105,7 @@ function field(label, name, value = '', type = 'text', extra = '') { return `<di
 function table(headers, rows, empty = 'Todavía no hay registros.') { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`; }
 function clientButton(c) { return `<div><button class="link" data-client="${esc(c.id)}">${esc(c.name)}</button>${c.cuit?`<br><small>CUIT ${esc(formatCuit(c.cuit))}</small>`:''}${c.zone?`<br><small>Zona: ${esc(c.zone)}</small>`:''}${c.email?`<br><small>${esc(c.email)}</small>`:''}<br><div class="actions"><button data-edit-client="${esc(c.id)}">Editar cliente</button><button data-statement="${esc(c.id)}">Estado de cuenta PDF</button><button data-delete-client="${esc(c.id)}">Eliminar cliente</button></div></div>`; }
 function paymentRows(payments) {return payments.map(p=>`<tr><td><div class="actions"><button class="primary" data-receipt="${esc(p.id)}">${p.voidedAt?'Recibo anulado':'Recibo PDF'}${p.receipt?` #${p.receipt.number}`:''}</button>${p.voidedAt?'<span class="badge pending">ANULADO · no afecta el saldo</span>':`<button data-edit-payment="${esc(p.id)}">Editar pago</button><button style="color:#a13f2c" data-void-payment="${esc(p.id)}">Borrar pago</button>`}</div>${paymentDetail(p)?`<small>${esc(paymentDetail(p))}</small>`:''}</td><td>${esc(p.receipt?.clientName||client(p.clientId)?.name)}</td><td>${prettyDate(p.date)}</td><td>${money(p.amount)}</td></tr>`).join('');}
-function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button data-edit-order="${esc(o.id)}">Editar pedido</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
+function orderRows(orders) { return orders.map(o=>`<tr><td><div class="actions"><button data-order="${esc(o.id)}">Ver #${esc(o.number)}</button><button data-edit-order="${esc(o.id)}">Editar pedido</button><button type="button" style="color:#a13f2c" data-delete-order="${esc(o.id)}">Eliminar pedido</button><button class="primary" data-pdf="${esc(o.id)}">Descargar PDF</button></div></td><td>${esc(client(o.clientId)?.name || 'Cliente')}</td><td>${prettyDate(o.date)}</td><td>${money(o.total)}</td><td><span class="badge ${o.status==='Pendiente'?'pending':''}">${esc(o.status)}</span></td></tr>`).join(''); }
 function followupPanel(today = date()) {
   const rows = db.clients
     .filter(c => /^\d{4}-\d{2}-\d{2}$/.test(c.followup) && c.followup <= today)
@@ -580,21 +580,24 @@ function orderAddresses(order, customer) {
   if (delivery) addresses.push(['Dirección de entrega', delivery]);
   return addresses;
 }
+function deleteOrder(id) {
+  const order = db.orders.find(o => o.id === id);
+  if (!order) return;
+  const owner = companyId;
+  if (!window.confirm(`¿Eliminar el pedido #${order.number} de ${client(order.clientId)?.name || 'este cliente'}? Esta acción no se puede deshacer.`)) return;
+  if (owner !== companyId || !db.orders.some(o => o.id === id)) return;
+  if (commit(next => { next.orders = next.orders.filter(item => item.id !== id); })) {
+    if ($('#modal').open) close();
+    render();
+    toast('Pedido eliminado.');
+  }
+}
 function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
   const customer = client(o.clientId);
   const addresses = orderAddresses(o, customer);
   modal(`Pedido #${o.number}`,`<img class="company-logo" src="${COMPANY_LOGOS[companyId]}" alt=""><p><strong>${esc(customer?.name)}</strong> · ${prettyDate(o.date)}</p>${addresses.map(([label, value]) => `<p><strong>${label}</strong> ${esc(value)}</p>`).join('')}${o.transport ? `<p><strong>Transporte</strong> ${esc(o.transport)}</p>` : ''}${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
-  const owner = companyId;
-  $('#delete-order').onclick = () => {
-    if (owner !== companyId) return;
-    if (!window.confirm(`¿Borrar el pedido #${o.number} de ${client(o.clientId)?.name || 'este cliente'}?`)) return;
-    if (commit(next => { next.orders = next.orders.filter(order => order.id !== id); })) {
-      close();
-      render();
-      toast('Pedido borrado.');
-    }
-  };
+  $('#delete-order').onclick = () => deleteOrder(id);
   $('#save-status').onclick=()=>{const status=$('#status').value;if(commit(n=>n.orders.find(x=>x.id===id).status=status)){close();render();toast('Estado actualizado');}};
   $('#print-order').insertAdjacentHTML('beforebegin',`<button class="primary" data-pdf="${esc(id)}">Descargar PDF</button>`);
   $('#print-order').insertAdjacentHTML('beforebegin',`<button data-edit-order="${esc(id)}">Editar pedido</button>`);
@@ -837,6 +840,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.payment)payment(b.dataset.payment);
   if(b.dataset.order)showOrder(b.dataset.order);
   if(b.dataset.editOrder)newOrder(b.dataset.editOrder);
+  if(b.dataset.deleteOrder)deleteOrder(b.dataset.deleteOrder);
   if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   if(b.dataset.receipt)downloadReceiptPdf(b.dataset.receipt,b);
   if(b.dataset.statement)chooseStatementPeriod(b.dataset.statement);
