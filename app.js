@@ -415,6 +415,23 @@ function newOrder(id) {
   }
   if (isAndroid) {
     const quickForm = $('#quick-order-entry');
+    const orderForm = $('#order-form');
+    const notes = $('#order-notes');
+    let manualFocus = false;
+    orderForm.addEventListener('pointerdown', () => { manualFocus = true; });
+    orderForm.addEventListener('keydown', event => {
+      if (event.key === 'Tab') manualFocus = true;
+    });
+    $('#order-lines').addEventListener('focusin', event => {
+      if (event.target.dataset.qty !== undefined) manualFocus = false;
+    });
+    // Android's IME can move focus directly without dispatching Enter.
+    notes.addEventListener('focus', event => {
+      const quantity = event.relatedTarget;
+      if (manualFocus || quantity?.dataset.qty === undefined) return;
+      notes.blur();
+      confirmQuantity(quantity);
+    });
     let activeEntry;
     search.addEventListener('focus', () => { activeEntry = search; });
     $('#order-lines').addEventListener('focusin', event => {
