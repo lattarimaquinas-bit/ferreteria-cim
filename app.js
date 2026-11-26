@@ -185,6 +185,35 @@ function showClient(id) {
   const movements = [...db.invoices.filter(i=>i.clientId===id).map(i=>({date:i.date,detail:`Factura ${i.number} · vence ${prettyDate(i.due)}`,amount:i.amount})),...activePayments(id).map(p=>({date:p.date,detail:`Pago · ${paymentDetail(p)||'Sin detalle'}`,amount:-p.amount}))].sort((a,b)=>a.date.localeCompare(b.date));
   modal(c.name,`<div class="actions"><span class="badge">Descuento: ${c.discount}%</span><button data-edit-client="${esc(id)}">Editar cliente</button><button class="primary" data-payment="${esc(id)}">Registrar pago</button></div><p>${esc(c.phone)}${c.address?` · ${esc(c.address)}`:''}</p><p class="muted">${esc(c.notes)}</p>${c.followup?`<p class="notice">Seguimiento: ${prettyDate(c.followup)}</p>`:''}<small>SALDO ACTUAL · positivo: debe / negativo: a favor</small><div class="balance">${money(balance(id))}</div>${table(['Fecha','Movimiento','Importe'],`<tr><td>—</td><td>Saldo inicial</td><td>${money(c.opening)}</td></tr>`+movements.map(m=>`<tr><td>${prettyDate(m.date)}</td><td>${esc(m.detail)}</td><td>${money(m.amount)}</td></tr>`).join(''))}`);
   $('#modal-body .actions').insertAdjacentHTML('beforeend',`<button data-statement="${esc(id)}">Estado de cuenta PDF</button>`);
+  $('#modal-body .actions').insertAdjacentHTML('beforeend','<button id="client-card-pdf">Imprimir ficha del cliente</button>');
+  $('#client-card-pdf').onclick = async () => {
+    try {
+      const JsPDF = await loadPdfLibrary();
+      const doc = new JsPDF({unit:'mm',format:'a4'});
+      doc.setFontSize(18);
+      doc.text('Ficha del cliente',16,22);
+      doc.setFontSize(11);
+      let y = 36;
+      const fields = [
+        ['Nombre', c.name], ['CUIT', c.cuit && formatCuit(c.cuit)],
+        ['Teléfono', c.phone], ['Email', c.email], ['Zona', c.zone],
+        ['Dirección', c.address], ['Dirección de entrega', c.deliveryAddress || c.address],
+        ['Transporte habitual', c.transport]
+      ];
+      for (const [label, value] of fields) {
+        if (!value) continue;
+        for (const line of doc.splitTextToSize(label + ': ' + value,176)) {
+          if (y > 278) { doc.addPage(); y = 20; }
+          doc.text(line,16,y);
+          y += 6;
+        }
+        y += 2;
+      }
+      presentPdf(doc,'Ficha-' + c.name + '.pdf','Ficha del cliente');
+    } catch (error) {
+      alert('No se pudo generar la ficha. ' + error.message);
+    }
+  };
   const deliveryAddress = c.deliveryAddress || c.address;
   if (deliveryAddress || c.transport) {
     $('#modal-body .actions').insertAdjacentHTML('afterend', `<p><strong>Dirección de entrega</strong> ${esc(deliveryAddress || '—')}<br><strong>Transporte habitual</strong> ${esc(c.transport || '—')}</p>`);
@@ -639,20 +668,15 @@ function buildOrderPdf(order, customer, company, JsPDF, logo) {
     const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,companyY);y=companyY+2+companyLines.length*7;
     doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
     doc.setTextColor(35,55,47);doc.setFont('helvetica','normal');doc.setFontSize(10);
-    doc.setFont('helvetica','bold');doc.text('Ficha del cliente',14,y);y+=6;
-    doc.setFont('helvetica','normal');
-    const addresses = orderAddresses(order, customer);
-    if (!addresses.length) addresses.push(['Dirección del cliente', 'Sin cargar']);
-    const details = [
-      ['Cliente', customer?.name || 'Sin cargar'],
-      ['CUIT', customer?.cuit && formatCuit(customer.cuit)],
-      ['Zona', customer?.zone], ['Teléfono', customer?.phone], ['Email', customer?.email],
-      ...addresses, ['Transporte', order.transport?.trim() || customer?.transport?.trim() || 'Sin cargar']
-    ];
-    for (const [label, value] of details) {
+    const customerLines=doc.splitTextToSize(`Cliente: ${text(customer?.name||'Cliente')}`,182);doc.text(customerLines,14,y);y+=customerLines.length*5+3;
+    if(customer?.cuit){doc.text(`CUIT: ${formatCuit(customer.cuit)}`,14,y);y+=5;}
+    if(customer?.zone){const zones=doc.splitTextToSize(text(`Zona: ${customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*5;}
+    if(customer?.email){const emails=doc.splitTextToSize(text(`Email: ${customer.email}`),182);doc.text(emails,14,y);y+=emails.length*5;}
+    for (const [label, value] of [...orderAddresses(order, customer), ['Transporte', order.transport]]) {
       if (!value) continue;
-      const lines = doc.splitTextToSize(text(label + ': ' + value),182);
-      doc.text(lines,14,y);y+=lines.length*5;
+      const deliveryLines = doc.splitTextToSize(`${label}: ${text(value)}`, 182);
+      doc.text(deliveryLines, 14, y);
+      y += deliveryLines.length * 5;
     }
     doc.setFillColor(237,242,232);doc.rect(14,y-4,182,8,'F');doc.setFont('helvetica','bold');doc.setFontSize(9);
     doc.text('Código / descripción',16,y+1);doc.text('Cant.',105,y+1,{align:'right'});doc.text('Precio lista',148,y+1,{align:'right'});doc.text('Importe',194,y+1,{align:'right'});y+=12;
