@@ -514,9 +514,19 @@ function newOrder(id) {
   };
   $('#order-form').onsubmit=e=>{e.preventDefault();if(owner!==companyId)return;if(original&&!db.orders.some(o=>o.id===original.id))return;if(!client($('#order-client').value))return alert('Seleccioná un cliente.');if(!lines.length)return alert('Agregá al menos un producto.');if(isAndroid && Array.from($('#order-lines').querySelectorAll('[data-qty]')).some(quantity => !validQuantity(quantity)))return;if(lines.some(l=>!Number.isFinite(l.qty)||l.qty<=0))return alert('Revisá las cantidades.');const t=totals();if(![t.subtotal,t.discountAmount,t.total].every(Number.isFinite))return alert('El importe es demasiado grande.');const record={...(original||{}),id:original?.id||uid(),number:original?.number||Math.max(0,...db.orders.map(o=>o.number))+1,clientId:$('#order-client').value,date:$('#order-date').value,deliveryAddress:deliveryAddress.value.trim(),transport:transport.value.trim(),lines:structuredClone(lines),...t,status:original?.status||'Pendiente',notes:$('#order-notes').value.trim()};if(commit(n=>{if(original)n.orders[n.orders.findIndex(o=>o.id===original.id)]=record;else n.orders.push(record);})){close();view='pedidos';render();toast(original?'Pedido actualizado. No afecta la cuenta corriente.':'Pedido guardado. No afecta la cuenta corriente.');}};
 }
+function orderAddresses(order, customer) {
+  const address = customer?.address?.trim();
+  const delivery = (order.deliveryAddress ?? customer?.deliveryAddress)?.trim();
+  const addresses = [];
+  if (address && address !== delivery) addresses.push(['Dirección del cliente', address]);
+  if (delivery) addresses.push(['Dirección de entrega', delivery]);
+  return addresses;
+}
 function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
-  modal(`Pedido #${o.number}`,`<p><strong>${esc(client(o.clientId)?.name)}</strong> · ${prettyDate(o.date)}</p>${o.deliveryAddress ? `<p><strong>Dirección de entrega</strong> ${esc(o.deliveryAddress)}</p>` : ''}${o.transport ? `<p><strong>Transporte</strong> ${esc(o.transport)}</p>` : ''}${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
+  const customer = client(o.clientId);
+  const addresses = orderAddresses(o, customer);
+  modal(`Pedido #${o.number}`,`<p><strong>${esc(customer?.name)}</strong> · ${prettyDate(o.date)}</p>${addresses.map(([label, value]) => `<p><strong>${label}</strong> ${esc(value)}</p>`).join('')}${o.transport ? `<p><strong>Transporte</strong> ${esc(o.transport)}</p>` : ''}${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
   const owner = companyId;
   $('#delete-order').onclick = () => {
     if (owner !== companyId) return;
@@ -559,7 +569,7 @@ function buildOrderPdf(order, customer, company, JsPDF) {
     if(customer?.cuit){doc.text(`CUIT: ${formatCuit(customer.cuit)}`,14,y);y+=5;}
     if(customer?.zone){const zones=doc.splitTextToSize(text(`Zona: ${customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*5;}
     if(customer?.email){const emails=doc.splitTextToSize(text(`Email: ${customer.email}`),182);doc.text(emails,14,y);y+=emails.length*5;}
-    for (const [label, value] of [['Dirección de entrega', order.deliveryAddress], ['Transporte', order.transport]]) {
+    for (const [label, value] of [...orderAddresses(order, customer), ['Transporte', order.transport]]) {
       if (!value) continue;
       const deliveryLines = doc.splitTextToSize(`${label}: ${text(value)}`, 182);
       doc.text(deliveryLines, 14, y);
