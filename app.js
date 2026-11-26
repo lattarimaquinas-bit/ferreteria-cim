@@ -79,13 +79,13 @@ function invoiceRows(invoices,today=date()) {
   }).join('');
 }
 const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días de atraso','Estado'];
-function invoiceBalances(id, excludeId, beforeId) {
+function invoiceBalances(id, excludeId, beforeId, through) {
   // Pagos a cuenta: primero saldo inicial, luego facturas por fecha de emisión.
   // `excludeId` sirve al corregir un pago: hay que calcular cómo quedaban las
   // facturas SIN ese pago, para volver a aplicarlo con el importe corregido.
-  let credit=round(activePayments(id, excludeId, beforeId).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
+  let credit=round(activePayments(id, excludeId, beforeId).filter(p=>!through||p.date<=through).reduce((s,p)=>s+p.amount,0)-(client(id)?.opening||0));
   credit=Math.max(0,credit);
-  return db.invoices.filter(i=>i.clientId===id).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id)).map(i=>{const paid=round(Math.min(credit,i.amount));credit=round(credit-paid);return {...i,paid,pending:round(i.amount-paid)};});
+  return db.invoices.filter(i=>i.clientId===id&&(!through||i.date<=through)).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id)).map(i=>{const paid=round(Math.min(credit,i.amount));credit=round(credit-paid);return {...i,paid,pending:round(i.amount-paid)};});
 }
 function paymentApplications(id,amount,excludeId,beforeId) {
   const applications=[];let remaining=amount;
@@ -194,13 +194,57 @@ function showClient(id) {
   $('#modal-body').insertAdjacentHTML('beforeend',`<h3 style="margin-top:20px">Pagos y recibos</h3>${table(['Recibo / acciones','Cliente','Fecha','Importe'],paymentRows(db.payments.filter(p=>p.clientId===id).slice().reverse()),'Todavía no hay pagos.')}`);
   $('#modal-body').insertAdjacentHTML('beforeend',`<h3 style="margin-top:20px">Facturas · días desde el vencimiento</h3>${table(invoiceHeaders,invoiceRows(invoiceBalances(id)),'No hay facturas registradas.')}`);
 }
-function accountStatement(id) {
+function chooseStatementPeriod(id) {
+  const customer = client(id);
+  if (!customer) return;
+  modal('Estado de cuenta PDF', `<form id="statement-period">
+    <p><strong>${esc(customer.name)}</strong></p>
+    <p class="help">Elegí las fechas de los movimientos. Dejá ambas vacías para incluir el historial completo.</p>
+    <div class="form-grid">${field('Desde', 'statement-from', '', 'date')}${field('Hasta', 'statement-to', '', 'date')}</div>
+    <div class="form-actions"><button type="button" id="statement-back">Volver</button><button class="primary" type="submit">Generar PDF</button></div>
+  </form>`);
+  const from = $('#statement-from');
+  const to = $('#statement-to');
+  from.oninput = () => { to.min = from.value; };
+  to.oninput = () => { from.max = to.value; };
+  $('#statement-back').onclick = () => showClient(id);
+  $('#statement-period').onsubmit = event => {
+    event.preventDefault();
+    downloadStatementPdf(id, event.submitter, from.value, to.value);
+  };
+}
+function accountStatement(id, from, through) {
   const customer=client(id);if(!customer)return null;
   const invoices=db.invoices.filter(i=>i.clientId===id),payments=activePayments(id);
   const items=[...invoices.map(i=>({date:i.date,detail:`Factura ${i.number} - vence ${prettyDate(i.due)}`,debit:i.amount,credit:0,priority:0})),...payments.map(p=>({date:p.date,detail:`Pago${p.receipt?` / Recibo #${p.receipt.number}`:''}${paymentDetail(p)?` - ${paymentDetail(p)}`:''}`,debit:0,credit:p.amount,priority:1}))].sort((a,b)=>a.date.localeCompare(b.date)||a.priority-b.priority);
-  let running=customer.opening;
-  const rows=[{date:'',detail:'Saldo inicial',debit:Math.max(0,running),credit:Math.max(0,-running),balance:running},...items.map(item=>{running=round(running+item.debit-item.credit);return {...item,balance:running};})];
-  return {company:companyNames[companyId],customer:structuredClone(customer),generatedAt:new Date().toISOString(),today:date(),rows,invoiceTotal:round(invoices.reduce((sum,i)=>sum+i.amount,0)),paymentTotal:round(payments.reduce((sum,p)=>sum+p.amount,0)),balance:balance(id),pending:structuredClone(invoiceBalances(id).filter(i=>i.pending>0))};
+  let opening = customer.opening;
+  const periodItems = [];
+  for (const item of items) {
+    if (through && item.date > through) break;
+    if (from && item.date < from) opening = round(opening + item.debit - item.credit);
+    else periodItems.push(item);
+  }
+  const openingLabel = from ? 'Saldo anterior al período' : 'Saldo inicial';
+  let running = opening;
+  const rows = [{date:'', detail:openingLabel, debit:Math.max(0, opening), credit:Math.max(0, -opening), balance:opening}];
+  let invoiceTotal = 0, paymentTotal = 0;
+  for (const item of periodItems) {
+    running = round(running + item.debit - item.credit);
+    invoiceTotal += item.debit;
+    paymentTotal += item.credit;
+    rows.push({...item, balance:running});
+  }
+  return {
+    company: companyNames[companyId],
+    customer: structuredClone(customer),
+    generatedAt: new Date().toISOString(),
+    today: through || date(),
+    from, through, opening, openingLabel, rows,
+    invoiceTotal: round(invoiceTotal),
+    paymentTotal: round(paymentTotal),
+    balance: running,
+    pending: invoiceBalances(id, undefined, undefined, through).filter(i => i.pending > 0),
+  };
 }
 function buildStatementPdf(statement, JsPDF, logo) {
   const doc=new JsPDF({unit:'mm',format:'a4'});
@@ -217,6 +261,11 @@ function buildStatementPdf(statement, JsPDF, logo) {
     if(statement.customer.cuit){doc.text(text(`CUIT: ${formatCuit(statement.customer.cuit)}`),14,y);y+=5;}
     if(statement.customer.zone){const zones=doc.splitTextToSize(text(`Zona: ${statement.customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*4.5;}
     if(statement.customer.email){const emails=doc.splitTextToSize(text(`Email: ${statement.customer.email}`),182);doc.text(emails,14,y);y+=emails.length*4.5;}
+    if (statement.from || statement.through) {
+      const period = [statement.from && `Desde ${prettyDate(statement.from)}`, statement.through && `Hasta ${prettyDate(statement.through)}`].filter(Boolean).join(' / ');
+      doc.text(period, 14, y);
+      y += 5;
+    }
     doc.setFontSize(8);doc.text(text(`Generado: ${new Date(statement.generatedAt).toLocaleString('es-AR')}`),14,y);y+=7;
     doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setFillColor(237,242,232);
     if(section==='movements'){doc.rect(14,y-4,182,8,'F');doc.text('Fecha',15,y+1);doc.text('Movimiento',39,y+1);doc.text('Debe',126,y+1,{align:'right'});doc.text('Haber',159,y+1,{align:'right'});doc.text('Saldo',196,y+1,{align:'right'});y+=12;}
@@ -235,9 +284,11 @@ function buildStatementPdf(statement, JsPDF, logo) {
   },51);
   section='summary';if(y+65>270)page();
   const summary=(label,amount,bold=false)=>{if(y+8>270)page();doc.setFont('helvetica',bold?'bold':'normal');doc.setFontSize(bold?12:10);doc.text(label,14,y);doc.text(cash(amount),196,y,{align:'right'});y+=8;};
-  summary('Saldo inicial',statement.customer.opening);summary('Total de facturas',statement.invoiceTotal);summary('Total de pagos',statement.paymentTotal);summary(statement.balance<0?'SALDO A FAVOR DEL CLIENTE':'SALDO PENDIENTE',Math.abs(statement.balance),true);
+  summary(statement.openingLabel,statement.opening);summary('Total de facturas',statement.invoiceTotal);summary('Total de pagos',statement.paymentTotal);summary(statement.balance<0?'SALDO A FAVOR DEL CLIENTE':'SALDO PENDIENTE',Math.abs(statement.balance),true);
   doc.setFont('helvetica','normal');doc.setFontSize(9);
-  const note='Saldo según todos los movimientos registrados. Los pedidos no generan deuda. Los pagos cubren primero saldo inicial y luego facturas por fecha de emisión.';
+  const note = statement.from || statement.through
+    ? 'El saldo incluye los movimientos anteriores al período. Las facturas pendientes se calculan hasta la fecha de cierre, incluyendo las anteriores al período.'
+    : 'Saldo según todos los movimientos registrados. Los pedidos no generan deuda. Los pagos cubren primero saldo inicial y luego facturas por fecha de emisión.';
   for(const line of doc.splitTextToSize(note,180)){if(y+5>270)page();doc.text(line,14,y);y+=5;}
   section='pending';if(y+32>265)page();else{y+=8;pendingHeading();}
   if(!statement.pending.length)doc.text('No hay facturas pendientes.',14,y);
@@ -246,8 +297,8 @@ function buildStatementPdf(statement, JsPDF, logo) {
   for(let i=1;i<=count;i++){doc.setPage(i);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(110);doc.text('Importes en pesos argentinos. Estado de cuenta informativo, no válido como factura ni recibo.',14,282);doc.text(`${i} / ${count}`,196,288,{align:'right'});}
   return doc;
 }
-async function downloadStatementPdf(id,button) {
-  const snapshot=accountStatement(id);if(!snapshot)return;
+async function downloadStatementPdf(id, button, from, through) {
+  const snapshot=accountStatement(id, from, through);if(!snapshot)return;
   const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
   try{const [JsPDF, logo] = await Promise.all([loadPdfLibrary(), loadCompanyLogo(companyId)]);const doc=buildStatementPdf(snapshot, JsPDF, logo);const safe=value=>value.replace(/[^a-zA-Z0-9_-]/g,'-');presentPdf(doc,`${safe(snapshot.company)}-estado-de-cuenta-${safe(snapshot.customer.name)}-${snapshot.today}.pdf`,`Estado de cuenta - ${snapshot.company}`);}
   catch(error){alert(`No se pudo generar el estado de cuenta. ${error.message}`);}
@@ -788,7 +839,7 @@ document.addEventListener('click',e=>{
   if(b.dataset.editOrder)newOrder(b.dataset.editOrder);
   if(b.dataset.pdf)downloadOrderPdf(b.dataset.pdf,b);
   if(b.dataset.receipt)downloadReceiptPdf(b.dataset.receipt,b);
-  if(b.dataset.statement)downloadStatementPdf(b.dataset.statement,b);
+  if(b.dataset.statement)chooseStatementPeriod(b.dataset.statement);
   if(b.dataset.editPayment)editPayment(b.dataset.editPayment);
   if(b.dataset.voidPayment)voidPayment(b.dataset.voidPayment);
   if(b.dataset.invoice)editInvoice(b.dataset.invoice);
