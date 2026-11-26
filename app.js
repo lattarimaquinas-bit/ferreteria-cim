@@ -202,14 +202,14 @@ function accountStatement(id) {
   const rows=[{date:'',detail:'Saldo inicial',debit:Math.max(0,running),credit:Math.max(0,-running),balance:running},...items.map(item=>{running=round(running+item.debit-item.credit);return {...item,balance:running};})];
   return {company:companyNames[companyId],customer:structuredClone(customer),generatedAt:new Date().toISOString(),today:date(),rows,invoiceTotal:round(invoices.reduce((sum,i)=>sum+i.amount,0)),paymentTotal:round(payments.reduce((sum,p)=>sum+p.amount,0)),balance:balance(id),pending:structuredClone(invoiceBalances(id).filter(i=>i.pending>0))};
 }
-function buildStatementPdf(statement,JsPDF) {
+function buildStatementPdf(statement, JsPDF, logo) {
   const doc=new JsPDF({unit:'mm',format:'a4'});
   const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
   const cash=value=>text(money(value));let y=18,section='movements';
   doc.setProperties({title:`${statement.company} - Estado de cuenta - ${statement.customer.name}`,author:statement.company,subject:'Facturas y pagos de cuenta corriente'});
   const pendingHeading=()=>{doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setFillColor(237,242,232);doc.text('FACTURAS PENDIENTES',14,y);y+=8;doc.rect(14,y-4,182,8,'F');doc.text('Factura',15,y+1);doc.text('Vence',122,y+1,{align:'right'});doc.text('Total factura',158,y+1,{align:'right'});doc.text('Pendiente',196,y+1,{align:'right'});y+=12;doc.setFont('helvetica','normal');};
   const heading=()=>{
-    y=18;doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
+    y=drawPdfCompanyLogo(doc, logo);doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
     const company=doc.splitTextToSize(text(statement.company),182);doc.text(company,14,y);y+=company.length*7;
     doc.setFontSize(13);doc.text('ESTADO DE CUENTA',14,y);y+=7;
     doc.setFontSize(11);const customer=doc.splitTextToSize(text(`Cliente: ${statement.customer.name}`),182);doc.text(customer,14,y);y+=customer.length*5+2;
@@ -249,7 +249,7 @@ function buildStatementPdf(statement,JsPDF) {
 async function downloadStatementPdf(id,button) {
   const snapshot=accountStatement(id);if(!snapshot)return;
   const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
-  try{const JsPDF=await loadPdfLibrary();const doc=buildStatementPdf(snapshot,JsPDF);const safe=value=>value.replace(/[^a-zA-Z0-9_-]/g,'-');presentPdf(doc,`${safe(snapshot.company)}-estado-de-cuenta-${safe(snapshot.customer.name)}-${snapshot.today}.pdf`,`Estado de cuenta - ${snapshot.company}`);}
+  try{const [JsPDF, logo] = await Promise.all([loadPdfLibrary(), loadCompanyLogo(companyId)]);const doc=buildStatementPdf(snapshot, JsPDF, logo);const safe=value=>value.replace(/[^a-zA-Z0-9_-]/g,'-');presentPdf(doc,`${safe(snapshot.company)}-estado-de-cuenta-${safe(snapshot.customer.name)}-${snapshot.today}.pdf`,`Estado de cuenta - ${snapshot.company}`);}
   catch(error){alert(`No se pudo generar el estado de cuenta. ${error.message}`);}
   finally{if(button){button.disabled=false;button.textContent=original;}}
 }
@@ -562,17 +562,25 @@ function loadPdfLibrary() {
   }).catch(error=>{pdfLibrary=undefined;throw error;});
   return pdfLibrary;
 }
+async function loadCompanyLogo(id) {
+  const response = await fetch(COMPANY_LOGOS[id]);
+  if (!response.ok) throw Error('No se pudo cargar el logo de la empresa.');
+  return new Uint8Array(await response.arrayBuffer());
+}
+function drawPdfCompanyLogo(doc, logo) {
+  const {width, height} = doc.getImageProperties(logo);
+  const logoWidth = 52;
+  const logoHeight = logoWidth * height / width;
+  doc.addImage(logo, 'PNG', 14, 12, logoWidth, logoHeight, 'company-logo');
+  return 12 + logoHeight + 8;
+}
 function buildOrderPdf(order, customer, company, JsPDF, logo) {
   const doc=new JsPDF({unit:'mm',format:'a4'});
   const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
   const cash=n=>text(money(n));let y=18;
   doc.setProperties({title:`${company} - Pedido ${order.number}`,subject:'Pedido comercial, no válido como factura',author:company});
-  const logoSize = doc.getImageProperties(logo);
-  const logoWidth = 52;
-  const logoHeight = logoWidth * logoSize.height / logoSize.width;
   const heading=()=>{
-    doc.addImage(logo, 'PNG', 14, 12, logoWidth, logoHeight, 'company-logo');
-    const companyY = 12 + logoHeight + 8;
+    const companyY = drawPdfCompanyLogo(doc, logo);
     doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
     const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,companyY);y=companyY+2+companyLines.length*7;
     doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
@@ -677,13 +685,10 @@ async function downloadReceiptPdf(id,button) {
 }
 async function downloadOrderPdf(id,button) {
   const order=db.orders.find(o=>o.id===id);if(!order)return;
-  const logoPath = COMPANY_LOGOS[companyId];
   const snapshot=structuredClone(order),customer=structuredClone(client(order.clientId)||{}),company=companyNames[companyId];
   const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
   try{
-    const [JsPDF, response] = await Promise.all([loadPdfLibrary(), fetch(logoPath)]);
-    if (!response.ok) throw Error('No se pudo cargar el logo de la empresa.');
-    const logo = new Uint8Array(await response.arrayBuffer());
+    const [JsPDF, logo] = await Promise.all([loadPdfLibrary(), loadCompanyLogo(companyId)]);
     const doc = buildOrderPdf(snapshot, customer, company, JsPDF, logo);
     const safeCompany=company.replace(/[^a-zA-Z0-9_-]/g,'-');
     const filename=`${safeCompany}-pedido-${snapshot.number}.pdf`;
