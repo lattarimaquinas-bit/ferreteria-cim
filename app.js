@@ -683,18 +683,36 @@ function buildOrderPdf(order, customer, company, JsPDF, logo) {
     doc.setFont('helvetica','normal');
   };
   const page=()=>{doc.addPage();heading();};
+  const rowBottom = 265;
+  const descriptionLineHeight = 3.8;
+  const rowGap = 3;
+  const descriptionTextOptions = {lineHeightFactor: descriptionLineHeight * 72 / (9 * 25.4)};
   heading();
-  for(const line of order.lines){
-    const description=doc.splitTextToSize(text(`${line.code} - ${line.name}`),78);let index=0;
-    while(index<description.length){
-      if(y+6>265)page();const available=Math.max(1,Math.floor((265-y)/4.5));const part=description.slice(index,index+available);
-      doc.text(part,14,y);
-      if(index===0){doc.setFontSize(8);doc.text(String(line.qty),105,y,{align:'right'});doc.text(cash(line.price),148,y,{align:'right'});doc.text(cash(round(line.price*line.qty)),196,y,{align:'right'});doc.setFontSize(9);}
-      y+=part.length*4.5;index+=part.length;if(index<description.length)page();
+  for (const line of order.lines) {
+    const description = doc.splitTextToSize(text(`${line.code} - ${line.name}`), 78);
+    let index = 0;
+    while (index < description.length) {
+      if (y + descriptionLineHeight > rowBottom) page();
+      const available = Math.max(1, Math.floor((rowBottom - y) / descriptionLineHeight));
+      const part = description.slice(index, index + available);
+      doc.text(part, 14, y, descriptionTextOptions);
+      if (index === 0) {
+        doc.setFontSize(8);
+        doc.text(String(line.qty), 105, y, {align:'right'});
+        doc.text(cash(line.price), 148, y, {align:'right'});
+        doc.text(cash(round(line.price * line.qty)), 196, y, {align:'right'});
+        doc.setFontSize(9);
+      }
+      y += part.length * descriptionLineHeight;
+      index += part.length;
+      if (index < description.length) page();
     }
-    doc.setDrawColor(225,230,222);doc.line(14,y,196,y);y+=6;
+    doc.setDrawColor(225,230,222);
+    doc.line(14,y,196,y);
+    y += rowGap;
   }
-  if(y+34>270)page();
+  // Reservar hasta la última línea de los totales. Las notas paginan por separado.
+  if(y+16>270)page();
   doc.setFontSize(10);doc.text('Subtotal de lista',110,y);doc.text(cash(order.subtotal),196,y,{align:'right'});y+=7;
   doc.text(`Descuento (${order.discount}%)`,110,y);doc.text(`- ${cash(order.discountAmount)}`,196,y,{align:'right'});y+=9;
   doc.setFont('helvetica','bold');doc.setFontSize(13);doc.text('TOTAL',110,y);doc.text(cash(order.total),196,y,{align:'right'});y+=12;
