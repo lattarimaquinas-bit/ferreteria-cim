@@ -639,15 +639,20 @@ function buildOrderPdf(order, customer, company, JsPDF, logo) {
     const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,companyY);y=companyY+2+companyLines.length*7;
     doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
     doc.setTextColor(35,55,47);doc.setFont('helvetica','normal');doc.setFontSize(10);
-    const customerLines=doc.splitTextToSize(`Cliente: ${text(customer?.name||'Cliente')}`,182);doc.text(customerLines,14,y);y+=customerLines.length*5+3;
-    if(customer?.cuit){doc.text(`CUIT: ${formatCuit(customer.cuit)}`,14,y);y+=5;}
-    if(customer?.zone){const zones=doc.splitTextToSize(text(`Zona: ${customer.zone}`),182);doc.text(zones,14,y);y+=zones.length*5;}
-    if(customer?.email){const emails=doc.splitTextToSize(text(`Email: ${customer.email}`),182);doc.text(emails,14,y);y+=emails.length*5;}
-    for (const [label, value] of [...orderAddresses(order, customer), ['Transporte', order.transport]]) {
+    doc.setFont('helvetica','bold');doc.text('Ficha del cliente',14,y);y+=6;
+    doc.setFont('helvetica','normal');
+    const addresses = orderAddresses(order, customer);
+    if (!addresses.length) addresses.push(['Dirección del cliente', 'Sin cargar']);
+    const details = [
+      ['Cliente', customer?.name || 'Sin cargar'],
+      ['CUIT', customer?.cuit && formatCuit(customer.cuit)],
+      ['Zona', customer?.zone], ['Teléfono', customer?.phone], ['Email', customer?.email],
+      ...addresses, ['Transporte', order.transport?.trim() || customer?.transport?.trim() || 'Sin cargar']
+    ];
+    for (const [label, value] of details) {
       if (!value) continue;
-      const deliveryLines = doc.splitTextToSize(`${label}: ${text(value)}`, 182);
-      doc.text(deliveryLines, 14, y);
-      y += deliveryLines.length * 5;
+      const lines = doc.splitTextToSize(text(label + ': ' + value),182);
+      doc.text(lines,14,y);y+=lines.length*5;
     }
     doc.setFillColor(237,242,232);doc.rect(14,y-4,182,8,'F');doc.setFont('helvetica','bold');doc.setFontSize(9);
     doc.text('Código / descripción',16,y+1);doc.text('Cant.',105,y+1,{align:'right'});doc.text('Precio lista',148,y+1,{align:'right'});doc.text('Importe',194,y+1,{align:'right'});y+=12;
