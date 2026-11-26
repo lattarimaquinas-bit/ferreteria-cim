@@ -1,5 +1,9 @@
 'use strict';
 let companyId = '1';
+const COMPANY_LOGOS = {
+  '1': 'logos/bonfigli-oscuro.png',
+  '2': 'logos/dimafer-oscuro.png',
+};
 let companyNames = {'1':'Bonfigli','2':'Dimafe'};
 try { const prefs = JSON.parse(localStorage.getItem('ferreteria-companies') || 'null'); if(prefs && ['1','2'].includes(prefs.active)) companyId=prefs.active; for(const id of ['1','2'])if(typeof prefs?.names?.[id]==='string' && prefs.names[id].trim())companyNames[id]=prefs.names[id]; } catch {}
 let KEY = companyId==='1'?'ferreteria-crm-v1':'ferreteria-crm-v1-company-2';
@@ -18,6 +22,9 @@ function loadCompany() {
   db={clients:[],products:[],orders:[],payments:[],invoices:[]};storageBlocked=false;$('#storage-warning').hidden=true;
   try { const raw = localStorage.getItem(KEY); if (raw) { const data = JSON.parse(raw); validateBackup(data); data.invoices ??= []; db = data; } else if (window.INITIAL_CATALOGS?.[companyId]) { db.products=structuredClone(window.INITIAL_CATALOGS[companyId].products); localStorage.setItem(KEY,JSON.stringify(db)); } }
   catch { storageBlocked = true; $('#storage-warning').hidden = false; $('#storage-warning').textContent = 'No se pudieron leer los datos de esta empresa. Para protegerlos, no se sobrescribirá el almacenamiento. Restaurá un respaldo válido desde Datos.'; }
+  const logo = $('#company-logo');
+  logo.src = COMPANY_LOGOS[companyId];
+  logo.hidden = false;
   $('#company-select').value=companyId;
   for(const option of $('#company-select').options)option.textContent=companyNames[option.value];
   document.title=`${companyNames[companyId]} · CRM`;
@@ -526,7 +533,7 @@ function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
   const customer = client(o.clientId);
   const addresses = orderAddresses(o, customer);
-  modal(`Pedido #${o.number}`,`<p><strong>${esc(customer?.name)}</strong> · ${prettyDate(o.date)}</p>${addresses.map(([label, value]) => `<p><strong>${label}</strong> ${esc(value)}</p>`).join('')}${o.transport ? `<p><strong>Transporte</strong> ${esc(o.transport)}</p>` : ''}${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
+  modal(`Pedido #${o.number}`,`<img class="company-logo" src="${COMPANY_LOGOS[companyId]}" alt=""><p><strong>${esc(customer?.name)}</strong> · ${prettyDate(o.date)}</p>${addresses.map(([label, value]) => `<p><strong>${label}</strong> ${esc(value)}</p>`).join('')}${o.transport ? `<p><strong>Transporte</strong> ${esc(o.transport)}</p>` : ''}${table(['Producto','Cantidad','Precio de lista','Importe'],o.lines.map(l=>`<tr><td>${esc(l.code)} · ${esc(l.name)}</td><td>${l.qty}</td><td>${money(l.price)}</td><td>${money(round(l.price*l.qty))}</td></tr>`).join(''))}<div class="order-summary"><div class="summary-row"><span>Subtotal</span><span>${money(o.subtotal)}</span></div><div class="summary-row"><span>Descuento (${o.discount}%)</span><span>− ${money(o.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(o.total)}</span></div></div><p>${esc(o.notes)}</p><div class="field"><label for="status">Estado de preparación (no indica si está pagado)</label><select id="status">${['Pendiente','Preparado','Entregado'].map(s=>`<option ${s===o.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="actions"><button id="save-status" class="primary">Guardar estado</button><button id="print-order">Imprimir / PDF</button><button type="button" id="delete-order">Borrar pedido</button></div>`);
   const owner = companyId;
   $('#delete-order').onclick = () => {
     if (owner !== companyId) return;
@@ -555,14 +562,19 @@ function loadPdfLibrary() {
   }).catch(error=>{pdfLibrary=undefined;throw error;});
   return pdfLibrary;
 }
-function buildOrderPdf(order, customer, company, JsPDF) {
+function buildOrderPdf(order, customer, company, JsPDF, logo) {
   const doc=new JsPDF({unit:'mm',format:'a4'});
   const text=value=>String(value??'').replace(/[\u00a0\u202f]/g,' ').replace(/\u2212/g,'-');
   const cash=n=>text(money(n));let y=18;
   doc.setProperties({title:`${company} - Pedido ${order.number}`,subject:'Pedido comercial, no válido como factura',author:company});
+  const logoSize = doc.getImageProperties(logo);
+  const logoWidth = 52;
+  const logoHeight = logoWidth * logoSize.height / logoSize.width;
   const heading=()=>{
+    doc.addImage(logo, 'PNG', 14, 12, logoWidth, logoHeight, 'company-logo');
+    const companyY = 12 + logoHeight + 8;
     doc.setTextColor(23,62,54);doc.setFont('helvetica','bold');doc.setFontSize(17);
-    const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,18);y=20+companyLines.length*7;
+    const companyLines=doc.splitTextToSize(text(company),180);doc.text(companyLines,14,companyY);y=companyY+2+companyLines.length*7;
     doc.setFontSize(12);doc.text(`PEDIDO #${order.number}`,14,y);doc.text(prettyDate(order.date),196,y,{align:'right'});y+=8;
     doc.setTextColor(35,55,47);doc.setFont('helvetica','normal');doc.setFontSize(10);
     const customerLines=doc.splitTextToSize(`Cliente: ${text(customer?.name||'Cliente')}`,182);doc.text(customerLines,14,y);y+=customerLines.length*5+3;
@@ -665,10 +677,14 @@ async function downloadReceiptPdf(id,button) {
 }
 async function downloadOrderPdf(id,button) {
   const order=db.orders.find(o=>o.id===id);if(!order)return;
+  const logoPath = COMPANY_LOGOS[companyId];
   const snapshot=structuredClone(order),customer=structuredClone(client(order.clientId)||{}),company=companyNames[companyId];
   const original=button?.textContent;if(button){button.disabled=true;button.textContent='Preparando…';}
   try{
-    const JsPDF=await loadPdfLibrary();const doc=buildOrderPdf(snapshot,customer,company,JsPDF);
+    const [JsPDF, response] = await Promise.all([loadPdfLibrary(), fetch(logoPath)]);
+    if (!response.ok) throw Error('No se pudo cargar el logo de la empresa.');
+    const logo = new Uint8Array(await response.arrayBuffer());
+    const doc = buildOrderPdf(snapshot, customer, company, JsPDF, logo);
     const safeCompany=company.replace(/[^a-zA-Z0-9_-]/g,'-');
     const filename=`${safeCompany}-pedido-${snapshot.number}.pdf`;
     presentPdf(doc,filename,`PDF del pedido #${snapshot.number}`);
