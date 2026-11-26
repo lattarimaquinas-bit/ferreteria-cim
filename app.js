@@ -370,7 +370,7 @@ function newOrder(id) {
   if(original){$('#modal-title').textContent=`${companyNames[companyId]} · Editar pedido #${original.number}`;$('#order-client').value=original.clientId;$('#order-date').value=original.date;$('#order-notes').value=original.notes;$('#order-form').insertAdjacentHTML('afterbegin','<p class="notice">Se conservan los precios y el descuento originales del pedido. Los productos nuevos usan el precio actual del catálogo. Si cambiás de cliente, se aplica el descuento actual del nuevo cliente. Los PDF ya enviados no se modifican: descargá una nueva copia después de guardar.</p>');}
   const totals=()=>{const selected=$('#order-client').value;const discount=original&&selected===original.clientId?original.discount:client(selected)?.discount||0;const subtotal=round(lines.reduce((s,l)=>s+round(l.price*l.qty),0));const discountAmount=round(subtotal*discount/100);return {subtotal,discount,discountAmount,total:round(subtotal-discountAmount)};};
   const summary=()=>{const t=totals();$('#order-summary').innerHTML=`<div class="summary-row"><span>Subtotal de lista</span><span>${money(t.subtotal)}</span></div><div class="summary-row"><span>Descuento del cliente (${t.discount}%)</span><span>− ${money(t.discountAmount)}</span></div><div class="summary-row total"><span>Total</span><span>${money(t.total)}</span></div><p class="help">Este pedido no suma deuda ni genera una factura. Las facturas ya emitidas se cargan por separado en Cuenta corriente.</p>`;};
-  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input type="number" ${quickFormAttribute} enterkeyhint="${isAndroid ? 'done' : 'next'}" aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
+  const draw=()=>{$('#order-lines').innerHTML=lines.map((l,i)=>`<div class="order-line"><span>${esc(l.name)}</span><input ${isAndroid ? 'type="text" inputmode="decimal" enterkeyhint="go"' : 'type="number" enterkeyhint="next"'} ${quickFormAttribute} aria-label="Cantidad de ${esc(l.name)}" min="0.001" step="0.001" value="${l.qty}" data-qty="${i}" required><span class="line-price">${money(l.price)} c/u</span><button type="button" class="icon" data-remove="${i}" aria-label="Quitar ${esc(l.name)}">✕</button></div>`).join('');summary();};
   bindClientFinder($('#order-client'));
   const search = $('#product-search');
   search.setAttribute('enterkeyhint', isAndroid ? 'go' : 'next');
@@ -401,9 +401,26 @@ function newOrder(id) {
     event.preventDefault();
     if (!event.repeat && !event.isComposing) confirmQuantity(quantity);
   };
+  const numericQuantity = document.createElement('input');
+  numericQuantity.type = 'number';
+  numericQuantity.min = '0.001';
+  numericQuantity.step = '0.001';
+  numericQuantity.required = true;
+  function quantityValue(quantity) {
+    if (!isAndroid) return quantity.valueAsNumber;
+    numericQuantity.value = quantity.value.trim().replace(',', '.');
+    return numericQuantity.validity.valid ? numericQuantity.valueAsNumber : NaN;
+  }
+  function validQuantity(quantity) {
+    if (isAndroid) {
+      quantity.setCustomValidity(Number.isFinite(quantityValue(quantity))
+        ? '' : 'Ingresá una cantidad mayor que cero con hasta tres decimales.');
+    }
+    return quantity.reportValidity();
+  }
   function confirmQuantity(quantity) {
-    if (!quantity.reportValidity()) return;
-    lines[Number(quantity.dataset.qty)].qty = quantity.valueAsNumber;
+    if (!validQuantity(quantity)) return;
+    lines[Number(quantity.dataset.qty)].qty = quantityValue(quantity);
     summary();
     search.value = '';
     options();
@@ -445,9 +462,9 @@ function newOrder(id) {
   }
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
   $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';focusQuantity(existing ? lines.indexOf(existing) : lines.length - 1);};
-  $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
+  $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){e.target.setCustomValidity('');lines[Number(e.target.dataset.qty)].qty=quantityValue(e.target)||0;summary();}};
   $('#order-lines').onclick=e=>{const b=e.target.closest('[data-remove]');if(b){lines.splice(Number(b.dataset.remove),1);draw();}};
-  $('#order-form').onsubmit=e=>{e.preventDefault();if(owner!==companyId)return;if(original&&!db.orders.some(o=>o.id===original.id))return;if(!client($('#order-client').value))return alert('Seleccioná un cliente.');if(!lines.length)return alert('Agregá al menos un producto.');if(isAndroid && Array.from($('#order-lines').querySelectorAll('[data-qty]')).some(quantity => !quantity.reportValidity()))return;if(lines.some(l=>!Number.isFinite(l.qty)||l.qty<=0))return alert('Revisá las cantidades.');const t=totals();if(![t.subtotal,t.discountAmount,t.total].every(Number.isFinite))return alert('El importe es demasiado grande.');const record={...(original||{}),id:original?.id||uid(),number:original?.number||Math.max(0,...db.orders.map(o=>o.number))+1,clientId:$('#order-client').value,date:$('#order-date').value,lines:structuredClone(lines),...t,status:original?.status||'Pendiente',notes:$('#order-notes').value.trim()};if(commit(n=>{if(original)n.orders[n.orders.findIndex(o=>o.id===original.id)]=record;else n.orders.push(record);})){close();view='pedidos';render();toast(original?'Pedido actualizado. No afecta la cuenta corriente.':'Pedido guardado. No afecta la cuenta corriente.');}};
+  $('#order-form').onsubmit=e=>{e.preventDefault();if(owner!==companyId)return;if(original&&!db.orders.some(o=>o.id===original.id))return;if(!client($('#order-client').value))return alert('Seleccioná un cliente.');if(!lines.length)return alert('Agregá al menos un producto.');if(isAndroid && Array.from($('#order-lines').querySelectorAll('[data-qty]')).some(quantity => !validQuantity(quantity)))return;if(lines.some(l=>!Number.isFinite(l.qty)||l.qty<=0))return alert('Revisá las cantidades.');const t=totals();if(![t.subtotal,t.discountAmount,t.total].every(Number.isFinite))return alert('El importe es demasiado grande.');const record={...(original||{}),id:original?.id||uid(),number:original?.number||Math.max(0,...db.orders.map(o=>o.number))+1,clientId:$('#order-client').value,date:$('#order-date').value,lines:structuredClone(lines),...t,status:original?.status||'Pendiente',notes:$('#order-notes').value.trim()};if(commit(n=>{if(original)n.orders[n.orders.findIndex(o=>o.id===original.id)]=record;else n.orders.push(record);})){close();view='pedidos';render();toast(original?'Pedido actualizado. No afecta la cuenta corriente.':'Pedido guardado. No afecta la cuenta corriente.');}};
 }
 function showOrder(id) {
   const o=db.orders.find(o=>o.id===id);if(!o)return;
