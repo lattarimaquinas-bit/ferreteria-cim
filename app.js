@@ -347,7 +347,7 @@ function newOrder(id) {
   if(!db.clients.length||(!original&&!db.products.length)){toast('Primero cargá al menos un cliente y un producto.');return;}
   const owner=companyId;
   let lines=original?structuredClone(original.lines):[];
-  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><button type="button" id="exact-product" hidden></button><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button class="primary">Guardar pedido</button></div></form>`);
+  modal('Nuevo pedido',`<form id="order-form"><div class="form-grid"><div class="field"><label for="order-client">Cliente</label><div style="display:flex;gap:.4rem"><select style="min-width:0;flex:1" id="order-client" required><option value="">Seleccionar cliente…</option>${db.clients.map(c=>`<option value="${esc(c.id)}">${esc(c.name)} · ${c.discount}% dto.</option>`).join('')}</select><button type="button" id="find-client" aria-controls="client-finder" aria-expanded="false">Buscar</button></div><div id="client-finder" hidden><input id="client-query" aria-label="Buscar cliente por nombre" placeholder="Escribí parte del nombre…"><div id="client-matches" style="max-height:12rem;overflow:auto"></div></div></div>${field('Fecha','order-date',date(),'date','required')}</div><div class="field"><label for="product-search">Buscar un producto</label><input id="product-search" placeholder="Código o descripción…"><button type="button" id="exact-product" hidden></button><select id="add-product" aria-label="Agregar producto"></select></div><div id="order-lines"></div><div class="order-summary" id="order-summary"></div>${field('Notas del pedido','order-notes')}<div class="form-actions"><button id="save-order" class="primary">Guardar pedido</button></div></form>`);
   const preview = $('#exact-product');
   function exactProduct(code) {
     if (!code) return;
@@ -398,7 +398,10 @@ function newOrder(id) {
     const quantity = event.target;
     if (event.key !== 'Enter' || quantity.dataset.qty === undefined) return;
     event.preventDefault();
-    if (event.repeat || !quantity.reportValidity()) return;
+    if (!event.repeat && !event.isComposing) confirmQuantity(quantity);
+  };
+  function confirmQuantity(quantity) {
+    if (!quantity.reportValidity()) return;
     lines[Number(quantity.dataset.qty)].qty = quantity.valueAsNumber;
     summary();
     search.value = '';
@@ -408,7 +411,19 @@ function newOrder(id) {
       quantity.blur();
     }
     search.focus();
-  };
+  }
+  // Some Android keyboards submit the form without delivering an Enter keydown.
+  $('#save-order').addEventListener('click', event => {
+    if (!isAndroid || event.detail !== 0) return;
+    const active = document.activeElement;
+    if (active === search) {
+      event.preventDefault();
+      addExactProduct();
+    } else if ($('#order-lines').contains(active) && active.dataset.qty !== undefined) {
+      event.preventDefault();
+      confirmQuantity(active);
+    }
+  });
   $('#product-search').oninput=options;options();draw();$('#order-client').onchange=summary;
   $('#add-product').onchange=e=>{const p=db.products.find(p=>p.id===e.target.value);if(!p)return;const existing=lines.find(l=>l.productId===p.id);if(existing)existing.qty++;else lines.push({productId:p.id,code:p.code,name:p.name,price:p.price,qty:1});e.target.value='';focusQuantity(existing ? lines.indexOf(existing) : lines.length - 1);};
   $('#order-lines').oninput=e=>{if(e.target.dataset.qty!==undefined){lines[Number(e.target.dataset.qty)].qty=Number(e.target.value);summary();}};
