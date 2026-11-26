@@ -574,7 +574,7 @@ function newOrder(id) {
 }
 function orderAddresses(order, customer) {
   const address = customer?.address?.trim();
-  const delivery = (order.deliveryAddress ?? customer?.deliveryAddress)?.trim();
+  const delivery = order.deliveryAddress?.trim() || customer?.deliveryAddress?.trim();
   const addresses = [];
   if (address && address !== delivery) addresses.push(['Dirección del cliente', address]);
   if (delivery) addresses.push(['Dirección de entrega', delivery]);
