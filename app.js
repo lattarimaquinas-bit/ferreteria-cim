@@ -74,8 +74,8 @@ function zoneDebtPanel() {
 }
 function invoiceRows(invoices,today=date()) {
   return invoices.map(i=>{
-    const days=daysOverdue(i.due,today),late=i.pending>0&&days>30;
-    return `<tr class="${late?'invoice-overdue':''}"><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td>${i.pending===0?'—':`${days} día${days===1?'':'s'}`}</td><td><span class="badge ${late?'overdue-alert':i.pending>0?'pending':''}">${i.pending===0?'Pagada':late?'Alerta: más de 30 días':days>0?'Vencida':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`;
+    const days=daysOverdue(i.due,today),late=i.pending>0&&days>0, dueToday=i.pending>0&&i.due===today;
+    return `<tr class="${late?'invoice-overdue':''}"><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td>${i.pending===0?'—':`${days} día${days===1?'':'s'}`}</td><td><span class="badge ${late?'overdue-alert':dueToday?'invoice-due-today':i.pending>0?'invoice-current':''}">${i.pending===0?'Pagada':late?'Vencida':dueToday?'Vence hoy':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`;
   }).join('');
 }
 const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días de atraso','Estado'];
