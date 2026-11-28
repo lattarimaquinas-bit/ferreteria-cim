@@ -57,7 +57,7 @@ function clientSearch(c) {return `${c.name} ${c.phone} ${c.email||''} ${c.cuit||
 function balance(id) { return round((client(id)?.opening || 0) + db.invoices.filter(i => i.clientId === id).reduce((s,i) => s+i.amount,0) - activePayments(id).reduce((s,p) => s+p.amount,0)); }
 function daysOverdue(due,today=date()) {
   // Días calendario: UTC evita diferencias por horario de verano.
-  return Math.max(0,Math.round((Date.parse(`${today}T00:00:00Z`)-Date.parse(`${due}T00:00:00Z`))/86400000));
+  return Math.round((Date.parse(`${today}T00:00:00Z`)-Date.parse(`${due}T00:00:00Z`))/86400000);
 }
 function zoneDebts() {
   const zones=new Map();
@@ -75,10 +75,10 @@ function zoneDebtPanel() {
 function invoiceRows(invoices,today=date()) {
   return invoices.map(i=>{
     const days=daysOverdue(i.due,today),late=i.pending>0&&days>0, dueToday=i.pending>0&&i.due===today;
-    return `<tr class="${late?'invoice-overdue':''}"><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td>${i.pending===0?'—':`${days} día${days===1?'':'s'}`}</td><td><span class="badge ${late?'overdue-alert':dueToday?'invoice-due-today':i.pending>0?'invoice-current':''}">${i.pending===0?'Pagada':late?'Vencida':dueToday?'Vence hoy':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`;
+    return `<tr class="${late?'invoice-overdue':''}"><td><button data-invoice="${esc(i.id)}">${esc(i.number)}</button><br>${esc(client(i.clientId)?.name)}</td><td>${money(i.amount)}</td><td>${money(i.pending)}</td><td>${prettyDate(i.date)}</td><td>${prettyDate(i.due)}</td><td>${i.pending===0?'—':`${days} día${Math.abs(days)===1?'':'s'}`}</td><td><span class="badge ${late?'overdue-alert':dueToday?'invoice-due-today':i.pending>0?'invoice-current':''}">${i.pending===0?'Pagada':late?'Vencida':dueToday?'Vence hoy':i.paid>0?'Pago parcial':'Pendiente'}</span></td></tr>`;
   }).join('');
 }
-const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días de atraso','Estado'];
+const invoiceHeaders=['Factura / cliente','Importe','Pendiente','Emisión','Vencimiento','Días al vencimiento / atraso','Estado'];
 function invoiceBalances(id, excludeId, beforeId, through) {
   // Pagos a cuenta: primero saldo inicial, luego facturas por fecha de emisión.
   // `excludeId` sirve al corregir un pago: hay que calcular cómo quedaban las
